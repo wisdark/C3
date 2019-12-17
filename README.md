@@ -8,6 +8,8 @@ C3 (Custom Command and Control) is a tool that allows Red Teams to rapidly devel
 
 See [this](https://labs.mwrinfosecurity.com/tools/c3) blog post for a detailed tutorial. 
 
+For contribution guide (how to develop a Channel tutorials), see [this page](CONTRIBUTING.md).
+
 ## Glossary
 
 The most commonly used terms in C3:
@@ -20,6 +22,7 @@ The most commonly used terms in C3:
 - `Channel` - an `Interface` used to transport data between two `Relays`. `Channels` works in pairs and do not support the one-to-many transmission (see `Negotiation Channels`).
 - `Negotiation Channel` - a special `Channel` capable of establishing regular `Channel` connections with multiple `Relays`. The negotiation process is fully automatic. `Negotiation Channels` support only negotiation protocol and cannot be used in any other transmission.
 - `Gateway Return Channel (GRC)` - the configured `Channel` that a `Relay` will use to send data back to the `Gateway`. `GRC` may be a route through another `Relay`. The first `Channel` (initial) on a `Node Relay` is automatically set as `GRC` for that `Node Relay`.
+- `C3 Minimal MTU` - the minimal portion of data that every C3 Channel is required to be able to send. Currently `C3 Minimal MTU` is equal to 64 bytes. Unless a chunk shorter than 64 bytes contains a complete packet, receiver Relay ignores it and sender Relay tries and re-sends last portion of data.
 - `Peripherals` - a third-party implant of a command and control framework. `Peripherals` talk to their native controllers via a `Controller`. For example, Cobalt Strike’s SMB beacon.
 - `Connectors` - an integration with a third-party command and control framework. For instance the ‘External C2’ interface exposed by Cobalt Strike’s Teamserver through the externalc2_start command.
 - `Binders` - common name for `Peripherals` and `Connectors`.

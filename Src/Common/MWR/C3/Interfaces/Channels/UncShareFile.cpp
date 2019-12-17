@@ -1,9 +1,42 @@
 #include "StdAfx.h"
+#include "UncShareFile.h"
+#include "Common/MWR/Crypto/Base64.h"
+#include <Common/MWR/WinTools/UniqueHandle.h>
 #include <random>
 #include <fstream>
 #include <sstream>
-#include "UncShareFile.h"
-#include "Common/MWR/Crypto/Base64.h"
+#include <sddl.h>
+
+namespace
+{
+	BOOL CreateDACL(SECURITY_ATTRIBUTES* pSA)
+	{
+		pSA->nLength = sizeof(SECURITY_ATTRIBUTES);
+		pSA->bInheritHandle = true;
+
+		TCHAR* szSD = TEXT("D:(A;ID;FA;;;S-1-1-0)");
+
+		if (NULL == pSA)
+			return FALSE;
+
+		return ConvertStringSecurityDescriptorToSecurityDescriptor(
+			szSD,
+			SDDL_REVISION_1,
+			&(pSA->lpSecurityDescriptor),
+			NULL);
+	}
+
+	BOOL FreeDACL(SECURITY_ATTRIBUTES* pSA)
+	{
+		return NULL == LocalFree(pSA->lpSecurityDescriptor);
+	}
+
+	std::unique_ptr<SECURITY_ATTRIBUTES, std::function<void(SECURITY_ATTRIBUTES*)>> g_FullAccessDACL =
+	{
+		[]() {auto ptr = new SECURITY_ATTRIBUTES; CreateDACL(ptr); return ptr; }(),
+		[](SECURITY_ATTRIBUTES* ptr) {FreeDACL(ptr);  delete ptr; }
+	};
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 MWR::C3::Interfaces::Channels::UncShareFile::UncShareFile(ByteView arguments)
@@ -38,12 +71,18 @@ size_t MWR::C3::Interfaces::Channels::UncShareFile::OnSendToChannel(ByteView dat
 		} while (std::filesystem::exists(filePath) or std::filesystem::exists(tmpFilePath));
 
 		{
+			// Create file with FullAccess to "Everyone" group
+			auto file = WinTools::UniqueHandle(CreateFileA(tmpFilePath.generic_string().c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, g_FullAccessDACL.get(), CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr));
+			if (file.get() == INVALID_HANDLE_VALUE)
+				throw std::runtime_error(OBF_STR("UncShareFile channel: failed to create a file ") + tmpFilePath.generic_string());
+		}
+		{
+			// Write the contents of a file
 			std::ofstream tmpFile(tmpFilePath, std::ios::trunc | std::ios::binary);
 			tmpFile << std::string_view{ data };
 		}
 		std::filesystem::rename(tmpFilePath, filePath);
 
-		Log({ OBF("OnSend() called for UncShareFile carrying ") + std::to_string(data.size()) + OBF(" bytes"), LogMessage::Severity::DebugInformation });
 		return data.size();
 	}
 	catch (std::exception& exception)
@@ -54,39 +93,40 @@ size_t MWR::C3::Interfaces::Channels::UncShareFile::OnSendToChannel(ByteView dat
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::ByteVector MWR::C3::Interfaces::Channels::UncShareFile::OnReceiveFromChannel()
+std::vector<MWR::ByteVector> MWR::C3::Interfaces::Channels::UncShareFile::OnReceiveFromChannel()
 {
 	// Read a single packet from the oldest file that belongs to this channel
 
 	std::vector<std::filesystem::path> channelFiles;
 	for (auto&& directoryEntry : std::filesystem::directory_iterator(m_FilesystemPath))
-	{
 		if (BelongToChannel(directoryEntry.path()))
 			channelFiles.emplace_back(directoryEntry.path());
-	}
 
-	if (channelFiles.empty())
-		return {};
 
-	auto oldestFile = std::min_element(channelFiles.begin(), channelFiles.end(), [](auto const& a, auto const& b) -> bool { return std::filesystem::last_write_time(a) < std::filesystem::last_write_time(b); });
+	std::sort(channelFiles.begin(), channelFiles.end(), [](auto const& a, auto const& b) -> bool { return std::filesystem::last_write_time(a) < std::filesystem::last_write_time(b); });
 
-	// Get the contents of the file and pass on. Return the packet even if removing the file failed.
-	ByteVector packet;
-	try
+	std::vector<ByteVector> ret;
+	ret.reserve(channelFiles.size());
+	for (auto&& file : channelFiles)
 	{
+		ByteVector packet;
+		try
 		{
-			std::ifstream readFile(oldestFile->generic_string(), std::ios::binary);
+			auto readFile = std::ifstream(file, std::ios::binary);
 			packet = ByteVector{ std::istreambuf_iterator<char>{readFile}, {} };
+			readFile.close();
+			RemoveFile(file);
+		}
+		catch (std::exception& exception)
+		{
+			Log({ OBF("Caught a std::exception when processing contents of filename: ") + file.generic_string() + OBF(" : ") + exception.what(), LogMessage::Severity::Error });
+			break;
 		}
 
-		RemoveFile(*oldestFile);
-	}
-	catch (std::exception& exception)
-	{
-		Log({ OBF("Caught a std::exception when processing contents of filename: ") + oldestFile->generic_string() + OBF(" : ") + exception.what(), LogMessage::Severity::Error });
+		ret.push_back(std::move(packet));
 	}
 
-	return packet;
+	return ret;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

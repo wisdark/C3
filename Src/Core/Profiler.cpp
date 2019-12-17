@@ -104,9 +104,7 @@ uint32_t MWR::C3::Core::Profiler::GetBinderTo(uint32_t id)
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 MWR::ByteVector MWR::C3::Core::Profiler::TranslateCommand(json const& command)
 {
-	return ByteVector{}
-		.Write(command.at("id").get<uint16_t>())
-		.Concat(TranslateArguments(command.at("arguments")));
+	return ByteVector{}.Concat(command.at("id").get<uint16_t>(), TranslateArguments(command.at("arguments")));
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -119,7 +117,7 @@ MWR::ByteVector MWR::C3::Core::Profiler::TranslateArguments(json const& argument
 		if (!argument.is_array())
 			translate(argument);
 		else
-			for (auto subargument : argument)
+			for (auto const subargument : argument)
 				translate(subargument);
 	}
 
@@ -137,9 +135,7 @@ MWR::ByteVector MWR::C3::Core::Profiler::TranslateStartupCommand(json const& jco
 	if (command == createCommands.cend() || !command->m_IsDevice)
 		throw std::logic_error{ "Failed to find a create command" };
 
-	return ByteVector{}
-		.Write(command->m_IsNegotiableChannel, command->m_Hash)
-		.Concat(TranslateArguments(jcommand.at("arguments")));
+	return ByteVector{}.Concat(command->m_IsNegotiableChannel, command->m_Hash, TranslateArguments(jcommand.at("arguments")));
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -243,7 +239,7 @@ void MWR::C3::Core::Profiler::RestoreFromSnapshot()
 			);
 
 			auto jitter = std::pair{ MWR::Utils::ToMilliseconds(channel["jitter"][0].get<float>()), MWR::Utils::ToMilliseconds(channel["jitter"][1].get<float>()) };
-			device->SetUpdateFrequency(jitter.first, jitter.second);
+			device->SetUpdateDelay(jitter.first, jitter.second);
 			auto profile = Get(); // we need to take profile each time, as it is also taken in CreateAndAttachDevice and that would lead to deadlock.
 			auto channelProfile = profile.m_Gateway.m_Channels.Find(did);
 			channelProfile->m_StartupArguments = channel["startupCommand"];
@@ -513,6 +509,10 @@ void MWR::C3::Core::Profiler::Agent::ParseAndRunCommand(json const& jCommandElem
 
 	auto commandWithArgs = base64::decode<ByteVector>(jCommandElement["Command"]["ByteForm"].get<std::string>());
 
+	auto gateRelay = profiler->m_Gateway->m_Gateway.lock();
+	if (!gateRelay)
+		return; // probably shutting down
+
 	if (deviceId)
 	{
 		std::function<void()> finalizer = []() {};
@@ -525,9 +525,32 @@ void MWR::C3::Core::Profiler::Agent::ParseAndRunCommand(json const& jCommandElem
 			switch (static_cast<MWR::C3::Core::Relay::Command>(commandId))
 			{
 			case MWR::C3::Core::Relay::Command::Close:
-				finalizer = [this, deviceId, deviceIsChannel]()
+				finalizer = [&]()
 				{
-					deviceIsChannel ? m_Channels.TryRemove(*deviceId) : m_Peripherals.TryRemove(*deviceId);
+					if (deviceIsChannel)
+					{
+						m_Channels.TryRemove(*deviceId);
+					}
+					else
+					{
+						// Find connector hash
+						auto element = m_Peripherals.Find(*deviceId);
+						if (!element)
+							return;
+
+						auto connectorHash = profiler->GetBinderTo(element->m_TypeHash);
+
+						// remove peripheral
+						m_Peripherals.TryRemove(*deviceId);
+
+						// Get connector
+						auto connector = gateRelay->m_Connectors.Find([&](auto const& e) { return e->GetNameHash() == connectorHash; });
+						if (!connector)
+							return;
+
+						// Remove connection.
+						connector->CloseConnection(RouteId{ m_Id, *deviceId }.ToByteVector());
+					}
 				};
 				break;
 			case MWR::C3::Core::Relay::Command::UpdateJitter:
@@ -543,10 +566,6 @@ void MWR::C3::Core::Profiler::Agent::ParseAndRunCommand(json const& jCommandElem
 				break;
 			}
 		}
-
-		auto gateRelay = profiler->m_Gateway->m_Gateway.lock();
-		if (!gateRelay)
-			return; // probably shutting down
 
 		auto route = gateRelay->FindRoute(m_Id);
 		if (!route)
@@ -594,12 +613,26 @@ void MWR::C3::Core::Profiler::Agent::RunCommand(ByteView commandWithArguments)
 	{
 	case NodeRelay::Command::Close:
 	{
-		finalizer = [this]()
+		finalizer = [&]()
 		{
 			auto owner = m_Owner.lock();
 			if (!owner)
 				throw std::runtime_error{ "Cannot obtain owner" };
+
 			m_Channels.Clear();
+			for (auto&& element : m_Peripherals.GetUnderlyingContainer())
+			{
+				auto connectorHash = profiler->GetBinderTo(element.m_TypeHash);
+
+				auto connector = gateRelay->m_Connectors.Find([&](auto const& e) { return e->GetNameHash() == connectorHash; });
+				if (!connector)
+					break;
+
+				// Remove connection.
+				connector->CloseConnection(RouteId{ m_Id, element.m_Id }.ToByteVector());
+			}
+
+			m_Peripherals.Clear();
 			owner->Get().m_Gateway.m_Agents.Remove(m_Id);
 		};
 		break;
@@ -608,8 +641,8 @@ void MWR::C3::Core::Profiler::Agent::RunCommand(ByteView commandWithArguments)
 	{
 		finalizer = [this, commandReadView]() mutable
 		{
-			auto [ridStr, didStr, isNbr] = commandReadView.Read<std::string, std::string, bool>();
-			ReAddRoute(RouteId::FromString(ridStr), DeviceId{ didStr }, isNbr);
+			auto [ridStr, didStr, isNbr] = commandReadView.Read<std::string_view, std::string_view, bool>();
+			ReAddRoute(ridStr, didStr, isNbr);
 		};
 		break;
 	}
@@ -617,7 +650,7 @@ void MWR::C3::Core::Profiler::Agent::RunCommand(ByteView commandWithArguments)
 	{
 		finalizer = [this, commandReadView]() mutable
 		{
-			ReRemoveRoute(RouteId::FromString(commandReadView.Read<std::string>()));
+			ReRemoveRoute(commandReadView.Read<std::string_view>());
 		};
 		break;
 	}
@@ -625,7 +658,7 @@ void MWR::C3::Core::Profiler::Agent::RunCommand(ByteView commandWithArguments)
 	{
 		finalizer = [this, commandReadView]() mutable
 		{
-			auto did = DeviceId{ commandReadView.Read<std::string>() };
+			auto did = DeviceId{ commandReadView.Read<std::string_view>() };
 			if (!m_Channels.Find(did))
 				throw std::runtime_error{ "Channel not found" };
 
@@ -680,7 +713,7 @@ void MWR::C3::Core::Profiler::Agent::PerformCreateCommand(json const& jCommandEl
 	// it is a create command
 	DeviceId newDeviceId = ++m_LastDeviceId;
 	ByteVector repacked;
-	repacked.Write(static_cast<std::underlying_type_t<NodeRelay::Command>>(NodeRelay::Command::AddDevice)).Concat(newDeviceId.ToByteVector()).Write(command->m_IsNegotiableChannel, command->m_Hash);
+	repacked.Concat(static_cast<std::underlying_type_t<NodeRelay::Command>>(NodeRelay::Command::AddDevice), newDeviceId.ToByteVector(), command->m_IsNegotiableChannel, command->m_Hash);
 	if (auto binder = profiler->GetBinderTo(command->m_Hash); binder && command->m_IsDevice) // peripheral, check if payload is needed.
 	{
 		auto connector = profiler->m_Gateway->m_Gateway.lock()->GetConnector(binder);
@@ -770,21 +803,43 @@ void MWR::C3::Core::Profiler::Gateway::ParseAndRunCommand(json const& jCommandEl
 				auto gateway = m_Gateway.lock();
 				if (auto device = gateway->FindDevice(MWR::Utils::SafeCast<DeviceId::UnderlyingIntegerType>(id)); device)
 				{
-					device->RunCommand(commandReadView);
-					if (auto localView = commandReadView; localView.Read<std::uint16_t>() == static_cast<std::uint16_t>(MWR::C3::Core::Relay::Command::UpdateJitter))
+					auto localView = commandReadView;
+					switch (MWR::C3::Core::Relay::Command(localView.Read<std::uint16_t>()))
 					{
-						Device* profilerElement = m_Channels.Find(device->GetDid());
-						if (!profilerElement)
-							profilerElement = m_Channels.Find(device->GetDid());
+						case MWR::C3::Core::Relay::Command::UpdateJitter:
+						{
+							Device* profilerElement = m_Channels.Find(device->GetDid());
+							if (!profilerElement)
+								profilerElement = m_Peripherals.Find(device->GetDid());
 
-						if (!profilerElement)
-							throw std::runtime_error{ "Device not found" };
+							if (!profilerElement)
+								throw std::runtime_error{ "Device not found" };
 
-						commandReadView.remove_prefix(sizeof(uint16_t)); // command id
-						profilerElement->m_Jitter.first = MWR::Utils::ToMilliseconds(commandReadView.Read<float>());
-						profilerElement->m_Jitter.second = MWR::Utils::ToMilliseconds(commandReadView.Read<float>());
+							profilerElement->m_Jitter.first = MWR::Utils::ToMilliseconds(localView.Read<float>());
+							profilerElement->m_Jitter.second = MWR::Utils::ToMilliseconds(localView.Read<float>());
+							break;
+						}
+						case MWR::C3::Core::Relay::Command::Close:
+						{
+							auto profilerElement = m_Peripherals.Find(device->GetDid());
+							if (!profilerElement)
+								break;
+
+							auto connectorHash = m_Owner.lock()->GetBinderTo(profilerElement->m_TypeHash);
+							auto connector = m_Gateway.lock()->m_Connectors.Find([&](auto const& e) { return e->GetNameHash() == connectorHash; });
+							if (!connector)
+								break;
+
+							// Remove connection.
+							connector->CloseConnection(RouteId{ m_Id, device->GetDid() }.ToByteVector());
+
+							break;
+						}
+						default:
+							break;
 					}
 
+					device->RunCommand(commandReadView);
 					return true;
 				}
 
@@ -825,6 +880,20 @@ json MWR::C3::Core::Profiler::Gateway::GetCapability()
 	// Construct the InitialPacket.
 	json initialPacket = json::parse(gateway->m_InterfaceFactory.GetCapability());
 
+	for (auto& interface : initialPacket["channels"])
+		if (!interface.contains("create"))
+			interface["create"] = json::parse(R"(
+			{
+				"arguments" :
+					[
+						{
+							"type": "binary",
+							"description": "Blob of data that will be provided to Channel constructor.",
+							"name": "arguments"
+						}
+					]
+			})");
+
 	// Create method in interface is constructor. It must be a relay/gateway command.
 	// initialPacket is copied to original to prevent iterator invalidation.
 	// last 256 commands will be reserved for common commands.
@@ -833,14 +902,13 @@ json MWR::C3::Core::Profiler::Gateway::GetCapability()
 		auto idToErase = 0;
 		std::vector<std::unordered_map<std::string, std::vector<json>>> buffer;
 		buffer.resize(prefix.size());
-		for (auto&& e : oryginal[interfaceType])
+		for (auto&& element : oryginal[interfaceType])
 		{
 			try
 			{
 				for (auto i = 0u; i < prefix.size(); ++i)
 				{
-
-					auto arguments = e.at("create").at("arguments");
+					auto arguments = element.at("create").at("arguments");
 					if (i) // NegotiationChannel command
 					{
 						if (arguments.empty() || arguments[0].size() != 2)
@@ -850,7 +918,7 @@ json MWR::C3::Core::Profiler::Gateway::GetCapability()
 					}
 
 					for (auto&& relayType : relayTypes)
-						buffer[i][relayType].push_back(json{ {"name", prefix[i] + e["name"].get<std::string>()}, {"arguments", arguments}, {"id", id} });
+						buffer[i][relayType].push_back(json{ {"name", prefix[i] + element["name"].get<std::string>()}, {"arguments", arguments}, {"id", id} });
 
 					m_CreateCommands.push_back({ id, initialPacket[interfaceType][idToErase]["type"].get<uint32_t>(), isDevice, !!i }); // store command id and hash.
 					--id;
@@ -860,7 +928,7 @@ json MWR::C3::Core::Profiler::Gateway::GetCapability()
 				initialPacket[interfaceType][idToErase].erase("create");
 				initialPacket[interfaceType][idToErase]["commands"].push_back(json{ {"name", isDevice ? "Close" : "TurnOff"}, {"id", static_cast<std::underlying_type_t<NodeRelay::Command>>(NodeRelay::Command::Close) }, {"arguments", json::array()} });
 				if (isDevice)
-					initialPacket[interfaceType][idToErase]["commands"].push_back(json{ {"name", "UpdateDelayJitter"}, {"description", "Set delay between receiving function calls."}, {"id", static_cast<std::underlying_type_t<NodeRelay::Command>>(NodeRelay::Command::UpdateJitter) },
+					initialPacket[interfaceType][idToErase]["commands"].push_back(json{ {"name", "Set UpdateDelayJitter"}, {"description", "Set delay between receiving function calls."}, {"id", static_cast<std::underlying_type_t<NodeRelay::Command>>(NodeRelay::Command::UpdateJitter) },
 						{"arguments", {
 							{{"type", "float"}, {"name", "Min"}, {"description", "Minimal delay in seconds"}, {"min", 0.03}},
 							{{"type", "float"}, {"name", "Max"}, {"description", "Maximal delay in seconds. "}, {"min", 0.03}}
@@ -946,14 +1014,14 @@ void MWR::C3::Core::Profiler::Gateway::RunCommand(ByteView commandWithArguments)
 	case GateRelay::Command::CreateRoute:
 	{
 		pin->CreateRoute(commandWithArguments);
-		auto [ridStr, didStr, isNbr] = commandWithArguments.Read<std::string, std::string, bool>();
-		ReAddRoute(RouteId::FromString(ridStr), DeviceId{ didStr }, isNbr);
+		auto [ridStr, didStr, isNbr] = commandWithArguments.Read<std::string_view, std::string_view, bool>();
+		ReAddRoute(ridStr, didStr, isNbr);
 		break;
 	}
 	case GateRelay::Command::RemoveRoute:
 	{
 		pin->RemoveRoute(commandWithArguments);
-		ReRemoveRoute(RouteId::FromString(commandWithArguments.Read<std::string>()));
+		ReRemoveRoute(commandWithArguments.Read<std::string_view>());
 		break;
 	}
 	case GateRelay::Command::ClearNetwork:
