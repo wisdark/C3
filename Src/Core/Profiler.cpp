@@ -4,20 +4,19 @@
 #include "GateRelay.h"
 #include "ConnectorBridge.h"
 #include "DeviceBridge.h"
-#include "Common/MWR/CppTools/Utils.h"
+#include "Common/FSecure/CppTools/Utils.h"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-MWR::C3::Core::Profiler::Action::ActionId MWR::C3::Core::Profiler::Action::m_LastActionId = 0;
-std::mutex MWR::C3::Core::Profiler::Profile::m_Mutex;
+std::mutex FSecure::C3::Core::Profiler::Profile::m_Mutex;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::Core::Profiler::Profiler(std::filesystem::path snapshotPath) : m_SnapshotPath(std::move(snapshotPath))
+FSecure::C3::Core::Profiler::Profiler(std::filesystem::path snapshotPath) : m_SnapshotPath(std::move(snapshotPath))
 {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::Initialize(std::string name, std::shared_ptr<GateRelay> gateway)
+void FSecure::C3::Core::Profiler::Initialize(std::string name, std::shared_ptr<GateRelay> gateway)
 {
 	m_Gateway = Gateway{ shared_from_this(), name, gateway };
 	for (auto&& e : m_Gateway->m_Gateway.lock()->m_InterfaceFactory.GetMap<AbstractPeripheral>())
@@ -28,12 +27,9 @@ void MWR::C3::Core::Profiler::Initialize(std::string name, std::shared_ptr<GateR
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::HandleActionsPacket(ByteView actionsPacket)
+void FSecure::C3::Core::Profiler::HandleActionsPacket(ByteView actionsPacket)
 {
 	std::scoped_lock lock(m_AccessMutex);
-
-	// Action adapter.
-	std::optional<Action> action;
 
 	try
 	{
@@ -54,8 +50,6 @@ void MWR::C3::Core::Profiler::HandleActionsPacket(ByteView actionsPacket)
 			throw std::runtime_error{ std::string{ elementName } +" is not specified." };
 		};
 
-		// Read CommandSeqNo and create Action.
-		action = std::optional<Action>(ReadJsonElement("CommandSeqNo")->get<Action::CommandSeqNo>());
 		// Parse AgentId.
 		if (auto relayAgentId = ReadJsonElement("relayAgentId"); relayAgentId->is_null())
 			m_Gateway->ParseAndRunCommand(actions);
@@ -66,31 +60,19 @@ void MWR::C3::Core::Profiler::HandleActionsPacket(ByteView actionsPacket)
 	}
 	catch (std::exception& exception)
 	{
-		if (action)
-		{
-			action->m_State = Action::State::Failed;
-			action->m_StateComment = exception.what();
-			if (auto gateway = m_Gateway->m_Gateway.lock())
-				gateway->Log({ "Caught an exception while parsing Action. "s + exception.what(), MWR::C3::LogMessage::Severity::DebugInformation });
-
-		}
-		else if (auto gateway = m_Gateway->m_Gateway.lock())
-			gateway->Log({ "Caught an exception while parsing Action. "s + exception.what(), MWR::C3::LogMessage::Severity::Error });
+		if (auto gateway = m_Gateway->m_Gateway.lock())
+			gateway->Log({ "Caught an exception while parsing Action. "s + exception.what(), FSecure::C3::LogMessage::Severity::Error});
 	}
-
-	// Schedule Action.
-	if (action)
-		m_RelevantActions.push_back(std::move(*action));
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::Core::Profiler::Profile MWR::C3::Core::Profiler::Get()
+FSecure::C3::Core::Profiler::Profile FSecure::C3::Core::Profiler::Get()
 {
 	return Profile{ *m_Gateway };
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-uint32_t MWR::C3::Core::Profiler::GetBinderTo(uint32_t id)
+uint32_t FSecure::C3::Core::Profiler::GetBinderTo(uint32_t id)
 {
 	for (auto&& e : m_BindersMappings)
 		if (e.first == id)
@@ -102,13 +84,13 @@ uint32_t MWR::C3::Core::Profiler::GetBinderTo(uint32_t id)
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::ByteVector MWR::C3::Core::Profiler::TranslateCommand(json const& command)
+FSecure::ByteVector FSecure::C3::Core::Profiler::TranslateCommand(json const& command)
 {
-	return ByteVector{}.Concat(command.at("id").get<uint16_t>(), TranslateArguments(command.at("arguments")));
+	return ByteVector::Create(command.at("id").get<uint16_t>()).Concat(TranslateArguments(command.at("arguments")));
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::ByteVector MWR::C3::Core::Profiler::TranslateArguments(json const& arguments)
+FSecure::ByteVector FSecure::C3::Core::Profiler::TranslateArguments(json const& arguments)
 {
 	ByteVector ret;
 	auto translate = [&ret](auto arg) { ret.Concat(Translate(arg.at("type"), arg.at("value"))); };
@@ -125,7 +107,7 @@ MWR::ByteVector MWR::C3::Core::Profiler::TranslateArguments(json const& argument
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::ByteVector MWR::C3::Core::Profiler::TranslateStartupCommand(json const& jcommand)
+FSecure::ByteVector FSecure::C3::Core::Profiler::TranslateStartupCommand(json const& jcommand)
 {
 	auto commandId = jcommand.at("id").get<std::uint16_t>();
 	auto const& createCommands = m_Gateway->m_CreateCommands;
@@ -135,28 +117,28 @@ MWR::ByteVector MWR::C3::Core::Profiler::TranslateStartupCommand(json const& jco
 	if (command == createCommands.cend() || !command->m_IsDevice)
 		throw std::logic_error{ "Failed to find a create command" };
 
-	return ByteVector{}.Concat(command->m_IsNegotiableChannel, command->m_Hash, TranslateArguments(jcommand.at("arguments")));
+	return ByteVector::Create(command->m_IsNegotiableChannel, command->m_Hash).Concat(TranslateArguments(jcommand.at("arguments")));
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::ByteVector MWR::C3::Core::Profiler::Translate(std::string const& type, json::value_type const& value)
+FSecure::ByteVector FSecure::C3::Core::Profiler::Translate(std::string const& type, json::value_type const& value)
 {
 	if (type == "uint8")
-		return ByteVector{}.Write(value.is_string() ? MWR::Utils::SafeCast<uint8_t>(std::stoull(value.get<std::string>())) : value.get<uint8_t>());
+		return ByteVector{}.Write(value.is_string() ? FSecure::Utils::SafeCast<uint8_t>(std::stoull(value.get<std::string>())) : value.get<uint8_t>());
 	if (type == "uint16")
-		return ByteVector{}.Write(value.is_string() ? MWR::Utils::SafeCast<uint16_t>(std::stoull(value.get<std::string>())) : value.get<uint16_t>());
+		return ByteVector{}.Write(value.is_string() ? FSecure::Utils::SafeCast<uint16_t>(std::stoull(value.get<std::string>())) : value.get<uint16_t>());
 	if (type == "uint32")
-		return ByteVector{}.Write(value.is_string() ? MWR::Utils::SafeCast<uint32_t>(std::stoull(value.get<std::string>())) : value.get<uint32_t>());
+		return ByteVector{}.Write(value.is_string() ? FSecure::Utils::SafeCast<uint32_t>(std::stoull(value.get<std::string>())) : value.get<uint32_t>());
 	if (type == "uint64")
-		return ByteVector{}.Write(value.is_string() ? MWR::Utils::SafeCast<uint64_t>(std::stoull(value.get<std::string>())) : value.get<uint64_t>());
+		return ByteVector{}.Write(value.is_string() ? FSecure::Utils::SafeCast<uint64_t>(std::stoull(value.get<std::string>())) : value.get<uint64_t>());
 	if (type == "int8")
-		return ByteVector{}.Write(value.is_string() ? MWR::Utils::SafeCast<int8_t>(std::stoll(value.get<std::string>())) : value.get<int8_t>());
+		return ByteVector{}.Write(value.is_string() ? FSecure::Utils::SafeCast<int8_t>(std::stoll(value.get<std::string>())) : value.get<int8_t>());
 	if (type == "int16")
-		return ByteVector{}.Write(value.is_string() ? MWR::Utils::SafeCast<int16_t>(std::stoll(value.get<std::string>())) : value.get<int16_t>());
+		return ByteVector{}.Write(value.is_string() ? FSecure::Utils::SafeCast<int16_t>(std::stoll(value.get<std::string>())) : value.get<int16_t>());
 	if (type == "int32")
-		return ByteVector{}.Write(value.is_string() ? MWR::Utils::SafeCast<int32_t>(std::stoll(value.get<std::string>())) : value.get<int32_t>());
+		return ByteVector{}.Write(value.is_string() ? FSecure::Utils::SafeCast<int32_t>(std::stoll(value.get<std::string>())) : value.get<int32_t>());
 	if (type == "int64")
-		return ByteVector{}.Write(value.is_string() ? MWR::Utils::SafeCast<int64_t>(std::stoll(value.get<std::string>())) : value.get<int64_t>());
+		return ByteVector{}.Write(value.is_string() ? FSecure::Utils::SafeCast<int64_t>(std::stoll(value.get<std::string>())) : value.get<int64_t>());
 	if (type == "float")
 		return ByteVector{}.Write(value.is_string() ? std::stof(value.get<std::string>()) : value.get<float>());
 	if (type == "boolean")
@@ -170,20 +152,17 @@ MWR::ByteVector MWR::C3::Core::Profiler::Translate(std::string const& type, json
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::DumpSnapshots()
+void FSecure::C3::Core::Profiler::DumpSnapshots()
 {
-	std::optional<std::size_t> oldHash;
+	auto sp = GetSnapshotProxy();
 	while (true)
 	{
-		const auto snapshotTmpPath = std::filesystem::path(m_SnapshotPath).replace_extension(".tmp");
-		const auto snapshot = Get().m_Gateway.CreateProfileSnapshot().dump(4);
-		const auto snapshotHash = std::hash<std::string>{}(snapshot);
-		if (!oldHash || *oldHash != snapshotHash)
+		if (sp.CheckUpdates())
 		{
-			oldHash = snapshotHash;
+			const auto snapshotTmpPath = std::filesystem::path(m_SnapshotPath).replace_extension(".tmp");
 			{
 				std::ofstream snapshotTmp{ snapshotTmpPath };
-				snapshotTmp << snapshot << std::endl;
+				snapshotTmp << sp.GetSnapshot().dump() << std::endl;
 			}
 			std::filesystem::rename(snapshotTmpPath, m_SnapshotPath);
 		}
@@ -192,7 +171,7 @@ void MWR::C3::Core::Profiler::DumpSnapshots()
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::RestoreFromSnapshot()
+void FSecure::C3::Core::Profiler::RestoreFromSnapshot()
 {
 	json snapshot;
 	// get snapshot
@@ -238,7 +217,7 @@ void MWR::C3::Core::Profiler::RestoreFromSnapshot()
 				readView
 			);
 
-			auto jitter = std::pair{ MWR::Utils::ToMilliseconds(channel["jitter"][0].get<float>()), MWR::Utils::ToMilliseconds(channel["jitter"][1].get<float>()) };
+			auto jitter = std::pair{ FSecure::Utils::ToMilliseconds(channel["jitter"][0].get<float>()), FSecure::Utils::ToMilliseconds(channel["jitter"][1].get<float>()) };
 			device->SetUpdateDelay(jitter.first, jitter.second);
 			auto profile = Get(); // we need to take profile each time, as it is also taken in CreateAndAttachDevice and that would lead to deadlock.
 			auto channelProfile = profile.m_Gateway.m_Channels.Find(did);
@@ -293,13 +272,13 @@ void MWR::C3::Core::Profiler::RestoreFromSnapshot()
 			{
 				auto device = agent->ReAddChannel(channel["iId"].get<std::string>(), channel["type"].get<HashT>(), channel["isReturnChannel"].get<bool>(), channel["isNegotiationChannel"].get<bool>());
 				device->m_StartupArguments = channel["startupCommand"];
-				device->m_Jitter = std::pair{ MWR::Utils::ToMilliseconds(channel["jitter"][0].get<float>()), MWR::Utils::ToMilliseconds(channel["jitter"][1].get<float>()) };
+				device->m_Jitter = std::pair{ FSecure::Utils::ToMilliseconds(channel["jitter"][0].get<float>()), FSecure::Utils::ToMilliseconds(channel["jitter"][1].get<float>()) };
 			}
 			for (auto&& peripheral : relay["peripherals"])
 			{
 				auto device = agent->ReAddPeripheral(peripheral["iId"].get<std::string>(), peripheral["type"].get<HashT>());
 				device->m_StartupArguments = peripheral["startupCommand"];
-				device->m_Jitter = std::pair{ MWR::Utils::ToMilliseconds(peripheral["jitter"][0].get<float>()), MWR::Utils::ToMilliseconds(peripheral["jitter"][1].get<float>()) };
+				device->m_Jitter = std::pair{ FSecure::Utils::ToMilliseconds(peripheral["jitter"][0].get<float>()), FSecure::Utils::ToMilliseconds(peripheral["jitter"][1].get<float>()) };
 			}
 			for (auto&& route : relay["routes"])
 				agent->ReAddRoute(RouteId(route["destinationAgent"].get<std::string>(), route["receivingInterface"].get<std::string>()), route["outgoingInterface"].get<std::string>(), route["isNeighbour"].get<bool>());
@@ -348,7 +327,7 @@ void MWR::C3::Core::Profiler::RestoreFromSnapshot()
 
 				auto creationCommand = base64::decode<ByteVector>(peripheral["startupCommand"]["ByteForm"].get<std::string>());
 				auto readView = ByteView{ creationCommand };
-				auto connectionId = RouteId{ route->m_RouteId.GetAgentId(),  DeviceId{ peripheral["iId"].get<std::string>() } }.ToByteVector();
+				auto connectionId = ByteVector::Create(RouteId{ route->m_RouteId.GetAgentId(),  DeviceId{ peripheral["iId"].get<std::string>() } });
 				readView.remove_prefix(sizeof(uint16_t)); // remove command id
 				connector->PeripheralCreationCommand(connectionId, readView); // throw away the response.
 				connector->OnCommandFromBinder(connectionId, base64::decode<ByteVector>(peripheral["startupCommand"]["FirstResponse"].get<std::string>()));
@@ -382,7 +361,7 @@ void MWR::C3::Core::Profiler::RestoreFromSnapshot()
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-json MWR::C3::Core::Profiler::HandleNewBuildMessage(json const& message)
+json FSecure::C3::Core::Profiler::HandleNewBuildMessage(json const& message)
 {
 	auto newBuildId = message.at("BuildId").get<BuildId::UnderlyingIntegerType>();
 	auto const& command = message.at("Command");
@@ -403,7 +382,7 @@ json MWR::C3::Core::Profiler::HandleNewBuildMessage(json const& message)
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-json MWR::C3::Core::Profiler::Gateway::CreateProfileSnapshot() const
+json FSecure::C3::Core::Profiler::Gateway::CreateProfileSnapshot() const
 {
 	auto gateway = m_Gateway.lock();
 	if (!gateway)
@@ -446,17 +425,17 @@ json MWR::C3::Core::Profiler::Gateway::CreateProfileSnapshot() const
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::Core::Profiler::Agent::Agent(std::weak_ptr<Profiler> owner, AgentId agentId, BuildId buildId, MWR::Crypto::PublicKey encryptionKey, bool isBanned, int32_t lastSeen, bool isX64, HostInfo hostInfo)
+FSecure::C3::Core::Profiler::Agent::Agent(std::weak_ptr<Profiler> owner, AgentId agentId, BuildId buildId, FSecure::Crypto::PublicKey encryptionKey, bool isBanned, int32_t lastSeen, bool isX64, HostInfo hostInfo)
 	: Relay(owner, agentId, buildId, lastSeen)
 	, m_EncryptionKey(encryptionKey)
+	, m_HostInfo(std::move(hostInfo))
 	, m_IsBanned(isBanned)
 	, m_IsX64(isX64)
-	, m_HostInfo(std::move(hostInfo))
 {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-json MWR::C3::Core::Profiler::Agent::CreateProfileSnapshot() const
+json FSecure::C3::Core::Profiler::Agent::CreateProfileSnapshot() const
 {
 	// Fill in basic data.
 	json profile = {
@@ -466,7 +445,7 @@ json MWR::C3::Core::Profiler::Agent::CreateProfileSnapshot() const
 		{ "_LastDeviceId", m_LastDeviceId },
 		{ "timestamp", m_LastSeen },
 		{ "hostInfo", m_HostInfo },
-		{ "isActive", MWR::Utils::TimeSinceEpoch() - m_LastSeen < 300 }
+		{ "isActive", FSecure::Utils::TimeSinceEpoch() - m_LastSeen < 300 }
 	};
 	if (!m_ErrorState.empty())
 		profile["error"] = m_ErrorState;
@@ -480,7 +459,7 @@ json MWR::C3::Core::Profiler::Agent::CreateProfileSnapshot() const
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::Agent::ParseAndRunCommand(json const& jCommandElement) noexcept(false)
+void FSecure::C3::Core::Profiler::Agent::ParseAndRunCommand(json const& jCommandElement) noexcept(false)
 {
 	auto profiler = m_Owner.lock();
 	if (!profiler)
@@ -522,14 +501,15 @@ void MWR::C3::Core::Profiler::Agent::ParseAndRunCommand(json const& jCommandElem
 		if (commandId > static_cast<std::uint16_t>(-256))
 		{
 			// generic interface commands
-			switch (static_cast<MWR::C3::Core::Relay::Command>(commandId))
+			switch (static_cast<FSecure::C3::Command>(commandId))
 			{
-			case MWR::C3::Core::Relay::Command::Close:
+			case FSecure::C3::Command::Close:
 				finalizer = [&]()
 				{
 					if (deviceIsChannel)
 					{
 						m_Channels.TryRemove(*deviceId);
+						m_Routes.RemoveIf([deviceId](Profiler::Route const& route) { return route.m_OutgoingDevice == deviceId; });
 					}
 					else
 					{
@@ -549,20 +529,22 @@ void MWR::C3::Core::Profiler::Agent::ParseAndRunCommand(json const& jCommandElem
 							return;
 
 						// Remove connection.
-						connector->CloseConnection(RouteId{ m_Id, *deviceId }.ToByteVector());
+						connector->CloseConnection(ByteVector::Create(RouteId{ m_Id, *deviceId }));
 					}
 				};
 				break;
-			case MWR::C3::Core::Relay::Command::UpdateJitter:
+			case FSecure::C3::Command::UpdateJitter:
 				finalizer = [this, deviceId, deviceIsChannel, commandReadView]() mutable
 				{
 					Device* device = deviceIsChannel ? m_Channels.Find(*deviceId) : m_Peripherals.Find(*deviceId);
 					if (!device)
 						throw std::runtime_error{ "Device not found" };
 
-					device->m_Jitter.first = MWR::Utils::ToMilliseconds(commandReadView.Read<float>());
-					device->m_Jitter.second = MWR::Utils::ToMilliseconds(commandReadView.Read<float>());
+					device->m_Jitter.first = FSecure::Utils::ToMilliseconds(commandReadView.Read<float>());
+					device->m_Jitter.second = FSecure::Utils::ToMilliseconds(commandReadView.Read<float>());
 				};
+				break;
+			default:
 				break;
 			}
 		}
@@ -587,7 +569,7 @@ void MWR::C3::Core::Profiler::Agent::ParseAndRunCommand(json const& jCommandElem
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::Agent::RunCommand(ByteView commandWithArguments)
+void FSecure::C3::Core::Profiler::Agent::RunCommand(ByteView commandWithArguments)
 {
 	auto commandReadView = commandWithArguments;
 	auto commandId = commandReadView.Read<std::uint16_t>();
@@ -609,9 +591,9 @@ void MWR::C3::Core::Profiler::Agent::RunCommand(ByteView commandWithArguments)
 		throw std::runtime_error("Failed to find route to agent id = " + m_Id.ToString());
 
 	std::function<void()> finalizer = []() {};
-	switch (static_cast<NodeRelay::Command>(commandId))
+	switch (static_cast<Command>(commandId))
 	{
-	case NodeRelay::Command::Close:
+	case Command::Close:
 	{
 		finalizer = [&]()
 		{
@@ -629,7 +611,7 @@ void MWR::C3::Core::Profiler::Agent::RunCommand(ByteView commandWithArguments)
 					break;
 
 				// Remove connection.
-				connector->CloseConnection(RouteId{ m_Id, element.m_Id }.ToByteVector());
+				connector->CloseConnection(ByteVector::Create(RouteId{ m_Id, element.m_Id }));
 			}
 
 			m_Peripherals.Clear();
@@ -637,7 +619,7 @@ void MWR::C3::Core::Profiler::Agent::RunCommand(ByteView commandWithArguments)
 		};
 		break;
 	}
-	case NodeRelay::Command::CreateRoute:
+	case Command::CreateRoute:
 	{
 		finalizer = [this, commandReadView]() mutable
 		{
@@ -646,7 +628,7 @@ void MWR::C3::Core::Profiler::Agent::RunCommand(ByteView commandWithArguments)
 		};
 		break;
 	}
-	case NodeRelay::Command::RemoveRoute:
+	case Command::RemoveRoute:
 	{
 		finalizer = [this, commandReadView]() mutable
 		{
@@ -654,7 +636,7 @@ void MWR::C3::Core::Profiler::Agent::RunCommand(ByteView commandWithArguments)
 		};
 		break;
 	}
-	case NodeRelay::Command::SetGRC:
+	case Command::SetGRC:
 	{
 		finalizer = [this, commandReadView]() mutable
 		{
@@ -667,7 +649,7 @@ void MWR::C3::Core::Profiler::Agent::RunCommand(ByteView commandWithArguments)
 		};
 		break;
 	}
-	case NodeRelay::Command::Ping:
+	case Command::Ping:
 		break;
 	default:
 		throw std::runtime_error("Profiler received an unknown command for agent id: " + m_Id.ToString());
@@ -683,7 +665,7 @@ void MWR::C3::Core::Profiler::Agent::RunCommand(ByteView commandWithArguments)
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::Agent::PerformCreateCommand(json const& jCommandElement)
+void FSecure::C3::Core::Profiler::Agent::PerformCreateCommand(json const& jCommandElement)
 {
 	auto profiler = m_Owner.lock();
 	if (!profiler)
@@ -713,14 +695,14 @@ void MWR::C3::Core::Profiler::Agent::PerformCreateCommand(json const& jCommandEl
 	// it is a create command
 	DeviceId newDeviceId = ++m_LastDeviceId;
 	ByteVector repacked;
-	repacked.Concat(static_cast<std::underlying_type_t<NodeRelay::Command>>(NodeRelay::Command::AddDevice), newDeviceId.ToByteVector(), command->m_IsNegotiableChannel, command->m_Hash);
+	repacked.Write(Command::AddDevice, newDeviceId, command->m_IsNegotiableChannel, command->m_Hash);
 	if (auto binder = profiler->GetBinderTo(command->m_Hash); binder && command->m_IsDevice) // peripheral, check if payload is needed.
 	{
 		auto connector = profiler->m_Gateway->m_Gateway.lock()->GetConnector(binder);
 		if (!connector)
 			throw std::runtime_error{ "Connector for requested peripheral is closed" };
 
-		auto updatedArguments = connector->PeripheralCreationCommand(RouteId{ route->m_RouteId.GetAgentId(),  newDeviceId}.ToByteVector(), commandReadView, m_IsX64);
+		auto updatedArguments = connector->PeripheralCreationCommand(ByteVector::Create(RouteId{ route->m_RouteId.GetAgentId(), newDeviceId }), commandReadView, m_IsX64);
 		repacked.Concat(updatedArguments);
 	}
 	else
@@ -742,7 +724,7 @@ void MWR::C3::Core::Profiler::Agent::PerformCreateCommand(json const& jCommandEl
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::Core::Profiler::Channel* MWR::C3::Core::Profiler::Agent::ReAddChannel(Device::Id did, HashT typeNameHash, bool isReturnChannel /*= false*/, bool isNegotiationChannel /*= false*/)
+FSecure::C3::Core::Profiler::Channel* FSecure::C3::Core::Profiler::Agent::ReAddChannel(Device::Id did, HashT typeNameHash, bool isReturnChannel /*= false*/, bool isNegotiationChannel /*= false*/)
 {
 	auto channel = Relay::ReAddChannel(did, typeNameHash, isReturnChannel, isNegotiationChannel);
 
@@ -753,7 +735,7 @@ MWR::C3::Core::Profiler::Channel* MWR::C3::Core::Profiler::Agent::ReAddChannel(D
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::Core::Profiler::Device* MWR::C3::Core::Profiler::Agent::ReAddPeripheral(Device::Id did, HashT typeNameHash)
+FSecure::C3::Core::Profiler::Device* FSecure::C3::Core::Profiler::Agent::ReAddPeripheral(Device::Id did, HashT typeNameHash)
 {
 	auto device = Relay::ReAddPeripheral(did, typeNameHash);
 
@@ -764,13 +746,13 @@ MWR::C3::Core::Profiler::Device* MWR::C3::Core::Profiler::Agent::ReAddPeripheral
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::Agent::AddScheduledDevice(DeviceId deviceId, json command)
+void FSecure::C3::Core::Profiler::Agent::AddScheduledDevice(DeviceId deviceId, json command)
 {
 	m_ScheduledDevices.emplace(deviceId.ToUnderlyingType(), std::move(command));
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::Core::Profiler::Channel* MWR::C3::Core::Profiler::Agent::FindGrc()
+FSecure::C3::Core::Profiler::Channel* FSecure::C3::Core::Profiler::Agent::FindGrc()
 {
 	for (auto& e : m_Channels.GetUnderlyingContainer())
 		if (e.m_IsReturnChannel)
@@ -780,15 +762,15 @@ MWR::C3::Core::Profiler::Channel* MWR::C3::Core::Profiler::Agent::FindGrc()
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::Core::Profiler::Gateway::Gateway(std::weak_ptr<Profiler> owner, std::string name, std::shared_ptr<GateRelay> gateway)
-	: Relay(owner, gateway->m_AgentId, gateway->m_BuildId, MWR::Utils::TimeSinceEpoch())
+FSecure::C3::Core::Profiler::Gateway::Gateway(std::weak_ptr<Profiler> owner, std::string name, std::shared_ptr<GateRelay> gateway)
+	: Relay(owner, gateway->m_AgentId, gateway->m_BuildId, FSecure::Utils::TimeSinceEpoch())
 	, m_Name(std::move(name))
 	, m_Gateway(gateway)
 {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::Gateway::ParseAndRunCommand(json const& jCommandElement) noexcept(false)
+void FSecure::C3::Core::Profiler::Gateway::ParseAndRunCommand(json const& jCommandElement) noexcept(false)
 {
 	auto commandWithArgs = base64::decode<ByteVector>(jCommandElement["Command"]["ByteForm"].get<std::string>());
 	auto commandReadView = ByteView{ commandWithArgs };
@@ -796,17 +778,17 @@ void MWR::C3::Core::Profiler::Gateway::ParseAndRunCommand(json const& jCommandEl
 	{
 		if (auto jConnectorId = jCommandElement.find(jsonEntryToFind); jConnectorId != jCommandElement.end() && !jConnectorId->is_null())
 		{
-			auto id = std::stoull(jConnectorId->get<std::string>(), nullptr, 16); // throws on error.
+			auto id = std::stoull(jConnectorId->template get<std::string>(), nullptr, 16); // throws on error.
 
 			if (isDevice)
 			{
 				auto gateway = m_Gateway.lock();
-				if (auto device = gateway->FindDevice(MWR::Utils::SafeCast<DeviceId::UnderlyingIntegerType>(id)); device)
+				if (auto device = gateway->FindDevice(FSecure::Utils::SafeCast<DeviceId::UnderlyingIntegerType>(id)); device)
 				{
 					auto localView = commandReadView;
-					switch (MWR::C3::Core::Relay::Command(localView.Read<std::uint16_t>()))
+					switch (FSecure::C3::Command(localView.Read<std::uint16_t>()))
 					{
-						case MWR::C3::Core::Relay::Command::UpdateJitter:
+						case FSecure::C3::Command::UpdateJitter:
 						{
 							Device* profilerElement = m_Channels.Find(device->GetDid());
 							if (!profilerElement)
@@ -815,24 +797,26 @@ void MWR::C3::Core::Profiler::Gateway::ParseAndRunCommand(json const& jCommandEl
 							if (!profilerElement)
 								throw std::runtime_error{ "Device not found" };
 
-							profilerElement->m_Jitter.first = MWR::Utils::ToMilliseconds(localView.Read<float>());
-							profilerElement->m_Jitter.second = MWR::Utils::ToMilliseconds(localView.Read<float>());
+							profilerElement->m_Jitter.first = FSecure::Utils::ToMilliseconds(localView.Read<float>());
+							profilerElement->m_Jitter.second = FSecure::Utils::ToMilliseconds(localView.Read<float>());
 							break;
 						}
-						case MWR::C3::Core::Relay::Command::Close:
+						case FSecure::C3::Command::Close:
 						{
-							auto profilerElement = m_Peripherals.Find(device->GetDid());
-							if (!profilerElement)
-								break;
+							if (auto profilerElement = m_Peripherals.Find(device->GetDid()))
+							{
+								auto connectorHash = m_Owner.lock()->GetBinderTo(profilerElement->m_TypeHash);
+								auto connector = m_Gateway.lock()->m_Connectors.Find([&](auto const& e) { return e->GetNameHash() == connectorHash; });
+								if (!connector)
+									break;
 
-							auto connectorHash = m_Owner.lock()->GetBinderTo(profilerElement->m_TypeHash);
-							auto connector = m_Gateway.lock()->m_Connectors.Find([&](auto const& e) { return e->GetNameHash() == connectorHash; });
-							if (!connector)
-								break;
-
-							// Remove connection.
-							connector->CloseConnection(RouteId{ m_Id, device->GetDid() }.ToByteVector());
-
+								// Remove connection.
+								connector->CloseConnection(ByteVector::Create(RouteId{ m_Id, device->GetDid() }));
+							}
+							else if (auto profilerElemnt = m_Channels.Find(device->GetDid()))
+							{
+								m_Routes.RemoveIf([did = device->GetDid()](Profiler::Route const& route) { return route.m_OutgoingDevice == did; });
+							}
 							break;
 						}
 						default:
@@ -846,7 +830,7 @@ void MWR::C3::Core::Profiler::Gateway::ParseAndRunCommand(json const& jCommandEl
 			}
 			else
 			{
-				if (auto connector = m_Connectors.Find(MWR::Utils::SafeCast<HashT>(id)); connector)
+				if (auto connector = m_Connectors.Find(FSecure::Utils::SafeCast<HashT>(id)); connector)
 					return connector->RunCommand(commandReadView), true;
 			}
 
@@ -868,7 +852,7 @@ void MWR::C3::Core::Profiler::Gateway::ParseAndRunCommand(json const& jCommandEl
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-json MWR::C3::Core::Profiler::Gateway::GetCapability()
+json FSecure::C3::Core::Profiler::Gateway::GetCapability()
 {
 	// Request access to Gateway object.
 	auto gateway = m_Gateway.lock();
@@ -881,18 +865,7 @@ json MWR::C3::Core::Profiler::Gateway::GetCapability()
 	json initialPacket = json::parse(gateway->m_InterfaceFactory.GetCapability());
 
 	for (auto& interface : initialPacket["channels"])
-		if (!interface.contains("create"))
-			interface["create"] = json::parse(R"(
-			{
-				"arguments" :
-					[
-						{
-							"type": "binary",
-							"description": "Blob of data that will be provided to Channel constructor.",
-							"name": "arguments"
-						}
-					]
-			})");
+		EnsureCreateExists(interface);
 
 	// Create method in interface is constructor. It must be a relay/gateway command.
 	// initialPacket is copied to original to prevent iterator invalidation.
@@ -918,21 +891,15 @@ json MWR::C3::Core::Profiler::Gateway::GetCapability()
 					}
 
 					for (auto&& relayType : relayTypes)
-						buffer[i][relayType].push_back(json{ {"name", prefix[i] + element["name"].get<std::string>()}, {"arguments", arguments}, {"id", id} });
+						buffer[i][relayType].push_back(json{ {"name", prefix[i] + element["name"].template get<std::string>()}, {"arguments", arguments}, {"id", id} });
 
-					m_CreateCommands.push_back({ id, initialPacket[interfaceType][idToErase]["type"].get<uint32_t>(), isDevice, !!i }); // store command id and hash.
+					m_CreateCommands.push_back({ id, initialPacket[interfaceType][idToErase]["type"].template get<uint32_t>(), isDevice, !!i }); // store command id and hash.
 					--id;
 				}
 
 				// modify initial Packet with extra entries.
 				initialPacket[interfaceType][idToErase].erase("create");
-				initialPacket[interfaceType][idToErase]["commands"].push_back(json{ {"name", isDevice ? "Close" : "TurnOff"}, {"id", static_cast<std::underlying_type_t<NodeRelay::Command>>(NodeRelay::Command::Close) }, {"arguments", json::array()} });
-				if (isDevice)
-					initialPacket[interfaceType][idToErase]["commands"].push_back(json{ {"name", "Set UpdateDelayJitter"}, {"description", "Set delay between receiving function calls."}, {"id", static_cast<std::underlying_type_t<NodeRelay::Command>>(NodeRelay::Command::UpdateJitter) },
-						{"arguments", {
-							{{"type", "float"}, {"name", "Min"}, {"description", "Minimal delay in seconds"}, {"min", 0.03}},
-							{{"type", "float"}, {"name", "Max"}, {"description", "Maximal delay in seconds. "}, {"min", 0.03}}
-						}} });
+				AddBuildInCommands(initialPacket[interfaceType][idToErase], isDevice);
 			}
 			catch (std::exception& e)
 			{
@@ -961,25 +928,25 @@ json MWR::C3::Core::Profiler::Gateway::GetCapability()
 		for (auto&& relayType : relayTypes)
 			initialPacket[relayType]["commands"].push_back(newCommand);
 	};
-	addRelayCommand({ "gateway", "relay" }, json{ {"name", "Close"}, {"id", static_cast<std::underlying_type_t<NodeRelay::Command>>(NodeRelay::Command::Close) }, {"arguments", json::array()} });
+	addRelayCommand({ "gateway", "relay" }, json{ {"name", "Close"}, {"id", static_cast<std::underlying_type_t<Command>>(Command::Close) }, {"arguments", json::array()} });
 
-	addRelayCommand({ "gateway", "relay" }, json{ {"name", "CreateRoute"}, {"id", static_cast<std::underlying_type_t<NodeRelay::Command>>(NodeRelay::Command::CreateRoute) }, {"arguments", {
+	addRelayCommand({ "gateway", "relay" }, json{ {"name", "CreateRoute"}, {"id", static_cast<std::underlying_type_t<Command>>(Command::CreateRoute) }, {"arguments", {
 						{{"type", "string"}, {"name", "RouteID"}, {"description", "Id of route in string form."}, {"min", 1}},
 						{{"type", "string"}, {"name", "DeviceId"}, {"description", "Id of device in string form."}, {"min", 1}},
 						{{"type", "boolean"}, {"name", "Neighbor"}, {"description", "Informs if relay is direct neighbor."}, {"defaultValue", true}}
 					}} });
 
-	addRelayCommand({ "gateway", "relay" }, json{ {"name", "RemoveRoute"}, {"id", static_cast<std::underlying_type_t<NodeRelay::Command>>(NodeRelay::Command::RemoveRoute) }, {"arguments", {
+	addRelayCommand({ "gateway", "relay" }, json{ {"name", "RemoveRoute"}, {"id", static_cast<std::underlying_type_t<Command>>(Command::RemoveRoute) }, {"arguments", {
 					{{"type", "string"}, {"name", "RouteID"}, {"description", "Id of route in string form."}, {"min", 1}}
 				}} });
 
-	addRelayCommand({ "relay" }, json{ {"name", "SetGatewayReturnChannel"}, {"id", static_cast<std::underlying_type_t<NodeRelay::Command>>(NodeRelay::Command::SetGRC) }, {"arguments", {
+	addRelayCommand({ "relay" }, json{ {"name", "SetGatewayReturnChannel"}, {"id", static_cast<std::underlying_type_t<Command>>(Command::SetGRC) }, {"arguments", {
 				{{"type", "string"}, {"name", "DeviceID"}, {"description", "Id of device in string form."}, {"min", 1}}
 			}} });
 
-	addRelayCommand({ "relay" }, json{ {"name", "Ping"}, {"id", static_cast<std::underlying_type_t<NodeRelay::Command>>(NodeRelay::Command::Ping) }, {"arguments", json::array() } });
+	addRelayCommand({ "relay" }, json{ {"name", "Ping"}, {"id", static_cast<std::underlying_type_t<Command>>(Command::Ping) }, {"arguments", json::array() } });
 
-	addRelayCommand({ "gateway" }, json{ {"name", "ClearNetwork"}, {"id", static_cast<std::underlying_type_t<NodeRelay::Command>>(NodeRelay::Command::ClearNetwork) }, {"arguments", {
+	addRelayCommand({ "gateway" }, json{ {"name", "ClearNetwork"}, {"id", static_cast<std::underlying_type_t<Command>>(Command::ClearNetwork) }, {"arguments", {
 					{{"type", "boolean"}, {"name", "Are you sure?"}, {"description", "Confirm clearing the network. All network state will be lost, this can not be undone."}, {"default", false}}
 				}} });
 
@@ -1000,31 +967,62 @@ json MWR::C3::Core::Profiler::Gateway::GetCapability()
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::Gateway::RunCommand(ByteView commandWithArguments)
+void FSecure::C3::Core::Profiler::Gateway::EnsureCreateExists(json& interface)
+{
+	if (!interface.contains("create"))
+		interface["create"] = json::parse(R"(
+{
+	"arguments" :
+		[
+			{
+				"type": "binary",
+				"description": "Blob of data that will be provided to Channel constructor.",
+				"name": "arguments"
+			}
+		]
+}
+)");
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+void FSecure::C3::Core::Profiler::Gateway::AddBuildInCommands(json& interface, bool isDevice)
+{
+	interface["commands"].push_back(json{ {"name", isDevice ? "Close" : "TurnOff"}, {"id", static_cast<std::underlying_type_t<Command>>(Command::Close) }, {"arguments", json::array()} });
+
+	if (isDevice)
+		interface["commands"].push_back(json{ {"name", "Set UpdateDelayJitter"}, {"description", "Set delay between receiving function calls."}, {"id", static_cast<std::underlying_type_t<Command>>(Command::UpdateJitter) },
+			{"arguments", {
+				{{"type", "float"}, {"name", "Min"}, {"description", "Minimal delay in seconds"}, {"min", 0.03}},
+				{{"type", "float"}, {"name", "Max"}, {"description", "Maximal delay in seconds. "}, {"min", 0.03}}
+			}} });
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+void FSecure::C3::Core::Profiler::Gateway::RunCommand(ByteView commandWithArguments)
 {
 	auto pin = m_Gateway.lock();
 	if (!pin)
 		return;
 
-	switch (static_cast<GateRelay::Command>(commandWithArguments.Read<std::underlying_type_t<GateRelay::Command>>()))
+	switch (static_cast<Command>(commandWithArguments.Read<std::underlying_type_t<Command>>()))
 	{
-	case GateRelay::Command::Close:
+	case Command::Close:
 		pin->Close();
 		break;
-	case GateRelay::Command::CreateRoute:
+	case Command::CreateRoute:
 	{
 		pin->CreateRoute(commandWithArguments);
 		auto [ridStr, didStr, isNbr] = commandWithArguments.Read<std::string_view, std::string_view, bool>();
 		ReAddRoute(ridStr, didStr, isNbr);
 		break;
 	}
-	case GateRelay::Command::RemoveRoute:
+	case Command::RemoveRoute:
 	{
 		pin->RemoveRoute(commandWithArguments);
 		ReRemoveRoute(commandWithArguments.Read<std::string_view>());
 		break;
 	}
-	case GateRelay::Command::ClearNetwork:
+	case Command::ClearNetwork:
 	{
 		// Clear real gateway
 		pin->Reset();
@@ -1037,11 +1035,13 @@ void MWR::C3::Core::Profiler::Gateway::RunCommand(ByteView commandWithArguments)
 		}
 		break;
 	}
+	default:
+		break;
 	}
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::Gateway::PerformCreateCommand(json const& jCommandElement)//GateRelay& gate, std::uint16_t commandId, ByteView arguments)
+void FSecure::C3::Core::Profiler::Gateway::PerformCreateCommand(json const& jCommandElement)//GateRelay& gate, std::uint16_t commandId, ByteView arguments)
 {
 	auto pin = m_Gateway.lock();
 	if (!pin)
@@ -1071,7 +1071,7 @@ void MWR::C3::Core::Profiler::Gateway::PerformCreateCommand(json const& jCommand
 			if (!connector)
 				throw std::runtime_error{ "Connector for requested peripheral is closed" };
 
-			updatedArguments = connector->PeripheralCreationCommand(RouteId{ gate.GetAgentId(), DeviceId(m_LastDeviceId + 1) }.ToByteVector(), arguments, MWR::Utils::IsProcess64bit());
+			updatedArguments = connector->PeripheralCreationCommand(ByteVector::Create(RouteId{ gate.GetAgentId(), DeviceId(m_LastDeviceId + 1) }), arguments, FSecure::Utils::IsProcess64bit());
 			arguments = updatedArguments;
 		}
 
@@ -1097,31 +1097,31 @@ void MWR::C3::Core::Profiler::Gateway::PerformCreateCommand(json const& jCommand
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::Gateway::ReTurnOnConnector(HashT typeNameHash, std::shared_ptr<ConnectorBridge> connector)
+void FSecure::C3::Core::Profiler::Gateway::ReTurnOnConnector(HashT typeNameHash, std::shared_ptr<ConnectorBridge> connector)
 {
 	m_Connectors.Add(typeNameHash, Connector{ m_Owner, typeNameHash, connector });
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::Gateway::ReTurnOffConnector(HashT connectorNameHash)
+void FSecure::C3::Core::Profiler::Gateway::ReTurnOffConnector(HashT connectorNameHash)
 {
 	m_Connectors.Remove(connectorNameHash);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::Gateway::ReDeleteChannel(DeviceId iidOfDeviceToDetach)
+void FSecure::C3::Core::Profiler::Gateway::ReDeleteChannel(DeviceId iidOfDeviceToDetach)
 {
 	m_Channels.Remove(iidOfDeviceToDetach);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::Gateway::ReDeletePeripheral(DeviceId iidOfDeviceToDetach)
+void FSecure::C3::Core::Profiler::Gateway::ReDeletePeripheral(DeviceId iidOfDeviceToDetach)
 {
 	m_Peripherals.Remove(iidOfDeviceToDetach);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::Core::Profiler::Agent* MWR::C3::Core::Profiler::Gateway::ReAddAgent(AgentId agentId, BuildId buildId, MWR::Crypto::PublicKey encryptionKey, bool isBanned, int32_t lastSeen, HostInfo hostInfo)
+FSecure::C3::Core::Profiler::Agent* FSecure::C3::Core::Profiler::Gateway::ReAddAgent(AgentId agentId, BuildId buildId, FSecure::Crypto::PublicKey encryptionKey, bool isBanned, int32_t lastSeen, HostInfo hostInfo)
 {
 	auto build = m_AgentBuilds.find(buildId);
 	if (build == m_AgentBuilds.cend())
@@ -1134,7 +1134,7 @@ MWR::C3::Core::Profiler::Agent* MWR::C3::Core::Profiler::Gateway::ReAddAgent(Age
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::Core::Profiler::Agent* MWR::C3::Core::Profiler::Gateway::ReAddRemoteAgent(RouteId childRouteId, BuildId buildId, MWR::Crypto::PublicKey encryptionKey, RouteId ridOfConectionPlace, HashT childGrcHash, int32_t lastSeen, HostInfo hostInfo)
+FSecure::C3::Core::Profiler::Agent* FSecure::C3::Core::Profiler::Gateway::ReAddRemoteAgent(RouteId childRouteId, BuildId buildId, FSecure::Crypto::PublicKey encryptionKey, RouteId ridOfConectionPlace, HashT childGrcHash, int32_t lastSeen, HostInfo hostInfo)
 {
 	// add agent
 	auto newAgent = ReAddAgent(childRouteId.GetAgentId(), buildId, encryptionKey, false, lastSeen, std::move(hostInfo)); // TODO check if is banned
@@ -1157,7 +1157,7 @@ MWR::C3::Core::Profiler::Agent* MWR::C3::Core::Profiler::Gateway::ReAddRemoteAge
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::Relay::UpdateFromNegotiationChannel(DeviceId negotiationDid, DeviceId newDeviceId, std::string newInputId, std::string newOutputId)
+void FSecure::C3::Core::Profiler::Relay::UpdateFromNegotiationChannel(DeviceId negotiationDid, DeviceId newDeviceId, std::string newInputId, std::string newOutputId)
 {
 	auto oldDeviceProfile = m_Channels.Find(negotiationDid);
 	auto newDeviceProfile = m_Channels.Find(newDeviceId);
@@ -1175,7 +1175,7 @@ void MWR::C3::Core::Profiler::Relay::UpdateFromNegotiationChannel(DeviceId negot
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::Core::Profiler::Agent* MWR::C3::Core::Profiler::Gateway::FindNeighborOnDevice(Relay& relay, DeviceId did)
+FSecure::C3::Core::Profiler::Agent* FSecure::C3::Core::Profiler::Gateway::FindNeighborOnDevice(Relay& relay, DeviceId did)
 {
 	auto& routes = relay.m_Routes.GetUnderlyingContainer();
 	auto it = std::find_if(routes.begin(), routes.end(), [&](auto& e) { return e.m_IsNeighbour && e.m_OutgoingDevice == did; });
@@ -1190,7 +1190,7 @@ MWR::C3::Core::Profiler::Agent* MWR::C3::Core::Profiler::Gateway::FindNeighborOn
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::Gateway::UpdateRouteTimestamps(AgentId agentId, int32_t timestamp)
+void FSecure::C3::Core::Profiler::Gateway::UpdateRouteTimestamps(AgentId agentId, int32_t timestamp)
 {
 	Agent* agent = m_Agents.Find(agentId);
 	if (!agent)
@@ -1201,9 +1201,9 @@ void MWR::C3::Core::Profiler::Gateway::UpdateRouteTimestamps(AgentId agentId, in
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::Core::Profiler::Agent* MWR::C3::Core::Profiler::Gateway::FindGatewaySideAgent(Agent* agent)
+FSecure::C3::Core::Profiler::Agent* FSecure::C3::Core::Profiler::Gateway::FindGatewaySideAgent(Agent* agent)
 {
-	auto channels = agent->m_Channels.GetUnderlyingContainer();
+	auto& channels = agent->m_Channels.GetUnderlyingContainer();
 	auto grcIt = std::find_if(channels.begin(), channels.end(), [](auto& e) {return e.m_IsReturnChannel; });
 	if (grcIt == channels.end())
 		throw std::runtime_error{ "GRC not found" };
@@ -1221,7 +1221,7 @@ MWR::C3::Core::Profiler::Agent* MWR::C3::Core::Profiler::Gateway::FindGatewaySid
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-std::vector<MWR::C3::Core::Profiler::Agent*> MWR::C3::Core::Profiler::Gateway::GetPathFromAgent(Agent* agent)
+std::vector<FSecure::C3::Core::Profiler::Agent*> FSecure::C3::Core::Profiler::Gateway::GetPathFromAgent(Agent* agent)
 {
 	std::vector<Agent*> ret;
 	auto depthLimit = 128;
@@ -1238,7 +1238,7 @@ std::vector<MWR::C3::Core::Profiler::Agent*> MWR::C3::Core::Profiler::Gateway::G
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-bool MWR::C3::Core::Profiler::Gateway::ConnectionExist(AgentId agentId)
+bool FSecure::C3::Core::Profiler::Gateway::ConnectionExist(AgentId agentId)
 {
 	if (auto path = GetPathFromAgent(m_Agents.Find(agentId)); !path.empty())
 		for (auto& e : m_Routes.GetUnderlyingContainer())
@@ -1249,7 +1249,7 @@ bool MWR::C3::Core::Profiler::Gateway::ConnectionExist(AgentId agentId)
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::Gateway::AddAgentBuild(BuildId bid, BuildProperties properties)
+void FSecure::C3::Core::Profiler::Gateway::AddAgentBuild(BuildId bid, BuildProperties properties)
 {
 	auto emplaced = m_AgentBuilds.emplace(bid, properties);
 	if (!emplaced.second)
@@ -1257,7 +1257,7 @@ void MWR::C3::Core::Profiler::Gateway::AddAgentBuild(BuildId bid, BuildPropertie
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::Gateway::ConditionalUpdateChannelParameters(RouteId connectionPlace)
+void FSecure::C3::Core::Profiler::Gateway::ConditionalUpdateChannelParameters(RouteId connectionPlace)
 {
 	try
 	{
@@ -1301,7 +1301,7 @@ void MWR::C3::Core::Profiler::Gateway::ConditionalUpdateChannelParameters(RouteI
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::Gateway::Reset()
+void FSecure::C3::Core::Profiler::Gateway::Reset()
 {
 	m_Agents.Clear();
 	m_Connectors.Clear();
@@ -1313,13 +1313,13 @@ void MWR::C3::Core::Profiler::Gateway::Reset()
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::Device::RunCommand(ByteView commandWithArguments)
+void FSecure::C3::Core::Profiler::Device::RunCommand(ByteView commandWithArguments)
 {
 
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::Core::Profiler::Device::Device(std::weak_ptr<Profiler> owner, Id id, HashT typeHash)
+FSecure::C3::Core::Profiler::Device::Device(std::weak_ptr<Profiler> owner, Id id, HashT typeHash)
 	: ProfileElement(owner)
 	, m_Id(id)
 	, m_TypeHash(typeHash)
@@ -1333,16 +1333,16 @@ MWR::C3::Core::Profiler::Device::Device(std::weak_ptr<Profiler> owner, Id id, Ha
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::Core::Profiler::Route::Route(std::weak_ptr<Profiler> owner, RouteId id, Device::Id outgoingDeviceId, bool isNeighbour)
+FSecure::C3::Core::Profiler::Route::Route(std::weak_ptr<Profiler> owner, RouteId id, Device::Id outgoingDeviceId, bool isNeighbour)
 	: ProfileElement(owner)
-	, m_Id(id)
 	, m_OutgoingDevice(outgoingDeviceId)
+	, m_Id(id)
 	, m_IsNeighbour(isNeighbour)
 {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-json MWR::C3::Core::Profiler::Route::CreateProfileSnapshot() const
+json FSecure::C3::Core::Profiler::Route::CreateProfileSnapshot() const
 {
 	// Construct profile.
 	json profile = {
@@ -1361,13 +1361,13 @@ json MWR::C3::Core::Profiler::Route::CreateProfileSnapshot() const
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::Route::RunCommand(ByteView commandWithArguments)
+void FSecure::C3::Core::Profiler::Route::RunCommand(ByteView commandWithArguments)
 {
 
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::Core::Profiler::Relay::Relay(std::weak_ptr<Profiler> owner, AgentId agentId, BuildId buildId, int32_t lastSeen)
+FSecure::C3::Core::Profiler::Relay::Relay(std::weak_ptr<Profiler> owner, AgentId agentId, BuildId buildId, int32_t lastSeen)
 	: ProfileElement(owner)
 	, m_Id(agentId)
 	, m_BuildId(buildId)
@@ -1376,45 +1376,45 @@ MWR::C3::Core::Profiler::Relay::Relay(std::weak_ptr<Profiler> owner, AgentId age
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::Relay::ParseAndRunCommand(json const& jCommandElement) noexcept(false)
+void FSecure::C3::Core::Profiler::Relay::ParseAndRunCommand(json const& jCommandElement) noexcept(false)
 {
 	throw std::runtime_error("Relay::ParseAndRunCommand should be overriden");
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::Relay::RunCommand(ByteView commandWithArguments)
+void FSecure::C3::Core::Profiler::Relay::RunCommand(ByteView commandWithArguments)
 {
 	throw std::runtime_error("Relay::RunCommand should be overriden");
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::Core::Profiler::Channel* MWR::C3::Core::Profiler::Relay::ReAddChannel(Device::Id did, HashT typeNameHash, bool isReturnChannel /*= false*/, bool isNegotiationChannel /*= false*/)
+FSecure::C3::Core::Profiler::Channel* FSecure::C3::Core::Profiler::Relay::ReAddChannel(Device::Id did, HashT typeNameHash, bool isReturnChannel /*= false*/, bool isNegotiationChannel /*= false*/)
 {
 	auto ret = m_Channels.Add(did, Channel{ m_Owner, did, typeNameHash, isReturnChannel, isNegotiationChannel });
 	return ret;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::Core::Profiler::Device* MWR::C3::Core::Profiler::Relay::ReAddPeripheral(Device::Id did, HashT typeNameHash)
+FSecure::C3::Core::Profiler::Device* FSecure::C3::Core::Profiler::Relay::ReAddPeripheral(Device::Id did, HashT typeNameHash)
 {
 	auto ret = m_Peripherals.Add(did, Device{ m_Owner, did, typeNameHash });
 	return ret;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::Relay::ReAddRoute(RouteId receivingRid, DeviceId outgoingInterface, bool isNeighbour)
+void FSecure::C3::Core::Profiler::Relay::ReAddRoute(RouteId receivingRid, DeviceId outgoingInterface, bool isNeighbour)
 {
 	m_Routes.Add(receivingRid, Route{ m_Owner, receivingRid, outgoingInterface, isNeighbour });
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::Relay::ReRemoveRoute(RouteId rid)
+void FSecure::C3::Core::Profiler::Relay::ReRemoveRoute(RouteId rid)
 {
 	m_Routes.Remove(rid);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::DeviceId MWR::C3::Core::Profiler::Relay::FindDirectionDevice(AgentId aid)
+FSecure::C3::DeviceId FSecure::C3::Core::Profiler::Relay::FindDirectionDevice(AgentId aid)
 {
 	auto& routes = m_Routes.GetUnderlyingContainer();
 	auto it = std::find_if(routes.begin(), routes.end(), [&](auto& e) {return e.m_Id.GetAgentId() == aid; });
@@ -1425,7 +1425,7 @@ MWR::C3::DeviceId MWR::C3::Core::Profiler::Relay::FindDirectionDevice(AgentId ai
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Profiler::Gateway::Connector::RunCommand(ByteView commandWithArguments)
+void FSecure::C3::Core::Profiler::Gateway::Connector::RunCommand(ByteView commandWithArguments)
 {
 	if (auto pin = m_Connector.lock(); pin)
 		pin->RunCommand(commandWithArguments);
@@ -1434,7 +1434,7 @@ void MWR::C3::Core::Profiler::Gateway::Connector::RunCommand(ByteView commandWit
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::Core::Profiler::Gateway::Connector::Connector(std::weak_ptr<Profiler> owner, Id id, std::shared_ptr<ConnectorBridge> connector)
+FSecure::C3::Core::Profiler::Gateway::Connector::Connector(std::weak_ptr<Profiler> owner, Id id, std::shared_ptr<ConnectorBridge> connector)
 	: ProfileElement(owner)
 	, m_Id(id)
 	, m_Connector(connector)
@@ -1443,36 +1443,14 @@ MWR::C3::Core::Profiler::Gateway::Connector::Connector(std::weak_ptr<Profiler> o
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::Core::Profiler::Action::Action(CommandSeqNo commandSeqNo, State state, std::string stateComment)
-	: BaseAction(state, stateComment)
-	, m_ActionId(++m_LastActionId)
-	, m_CommandSeqNo(commandSeqNo)
-{
-}
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::Core::Profiler::SubAction::SubAction(std::string description, State state, std::string stateComment)
-	: BaseAction(state, stateComment)
-	, m_Description(description)
-{
-}
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::Core::Profiler::BaseAction::BaseAction(State state, std::string stateComment)
-	: m_State(state)
-	, m_StateComment(stateComment)
-{
-}
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::Core::Profiler::Profile::Profile(Gateway& gateway)
+FSecure::C3::Core::Profiler::Profile::Profile(Gateway& gateway)
 	: m_Gateway(gateway)
 	, m_Lock(m_Mutex)
 {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-json MWR::C3::Core::Profiler::ProfileElement::CreateProfileSnapshot() const
+json FSecure::C3::Core::Profiler::ProfileElement::CreateProfileSnapshot() const
 {
 	// Start with empty JSON.
 	json profile;
@@ -1485,12 +1463,12 @@ json MWR::C3::Core::Profiler::ProfileElement::CreateProfileSnapshot() const
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::Core::Profiler::ProfileElement::ProfileElement(std::weak_ptr<Profiler> owner) : m_Owner(owner)
+FSecure::C3::Core::Profiler::ProfileElement::ProfileElement(std::weak_ptr<Profiler> owner) : m_Owner(owner)
 {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-json MWR::C3::Core::Profiler::Gateway::Connector::CreateProfileSnapshot() const
+json FSecure::C3::Core::Profiler::Gateway::Connector::CreateProfileSnapshot() const
 {
 	auto profile = __super::CreateProfileSnapshot();
 	profile["iId"] = Identifier(m_Id).ToString();
@@ -1503,20 +1481,20 @@ json MWR::C3::Core::Profiler::Gateway::Connector::CreateProfileSnapshot() const
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-json MWR::C3::Core::Profiler::Device::CreateProfileSnapshot() const
+json FSecure::C3::Core::Profiler::Device::CreateProfileSnapshot() const
 {
 	auto profile = __super::CreateProfileSnapshot();
 	profile["iId"] = m_Id.ToString();
 	profile["type"] = m_TypeHash;
 	profile["startupCommand"] = m_StartupArguments;
-	profile["jitter"] = { MWR::Utils::DoubleSeconds(m_Jitter.first).count(), MWR::Utils::DoubleSeconds(m_Jitter.second).count() };
+	profile["jitter"] = { FSecure::Utils::DoubleSeconds(m_Jitter.first).count(), FSecure::Utils::DoubleSeconds(m_Jitter.second).count() };
 
 	// get error here.
 	return profile;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::Core::Profiler::Channel::Channel(std::weak_ptr<Profiler> owner, Id id, HashT typeHash, bool isReturnChannel /*= false*/, bool isNegotiationChannel /*= false*/)
+FSecure::C3::Core::Profiler::Channel::Channel(std::weak_ptr<Profiler> owner, Id id, HashT typeHash, bool isReturnChannel /*= false*/, bool isNegotiationChannel /*= false*/)
 	: Device(owner, id, typeHash)
 	, m_IsReturnChannel(isReturnChannel)
 	, m_IsNegotiationChannel(isNegotiationChannel)
@@ -1524,7 +1502,7 @@ MWR::C3::Core::Profiler::Channel::Channel(std::weak_ptr<Profiler> owner, Id id, 
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-json MWR::C3::Core::Profiler::Channel::CreateProfileSnapshot() const
+json FSecure::C3::Core::Profiler::Channel::CreateProfileSnapshot() const
 {
 	auto profile = __super::CreateProfileSnapshot();
 	profile["isReturnChannel"] = m_IsReturnChannel;
@@ -1532,3 +1510,28 @@ json MWR::C3::Core::Profiler::Channel::CreateProfileSnapshot() const
 
 	return profile;
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+FSecure::C3::Core::Profiler::SnapshotProxy::SnapshotProxy(Profiler& profiler) :
+	m_Profiler(profiler)
+{
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+bool FSecure::C3::Core::Profiler::SnapshotProxy::CheckUpdates()
+{
+	m_CurrentSnapshot = m_Profiler.Get().m_Gateway.CreateProfileSnapshot();
+	auto currentHash = std::hash<json>{}(m_CurrentSnapshot);
+	if (m_PreviousHash && currentHash == *m_PreviousHash)
+		return false;
+
+	m_PreviousHash = currentHash;
+	return true;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+json const& FSecure::C3::Core::Profiler::SnapshotProxy::GetSnapshot() const
+{
+	return m_CurrentSnapshot;
+}
+

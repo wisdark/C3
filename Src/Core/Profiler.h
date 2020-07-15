@@ -1,9 +1,9 @@
 #pragma once
 
 #include "GateRelay.h"
-#include "Common/MWR/Sockets/Sockets.hpp"
+#include "Common/FSecure/Sockets/Sockets.hpp"
 
-namespace MWR::C3::Core
+namespace FSecure::C3::Core
 {
 	/// Virtualizes whole C3 Network with it's remote elements.
 	struct Profiler : std::enable_shared_from_this<Profiler>
@@ -53,6 +53,15 @@ namespace MWR::C3::Core
 				else
 					throw std::invalid_argument{ OBF("Attempt of removing Element that doesn't exist.") };
 			}
+
+			/// Removes all elements matching the predicate
+			/// @param predicate function that returns true for requested Element.
+			template<typename Predicate>
+			void RemoveIf(Predicate predicate)
+			{
+				m_Elements.erase(std::remove_if(begin(m_Elements), end(m_Elements), predicate), end(m_Elements));
+			}
+
 
 			/// Tries to remove Element from container.
 			/// @param id ID of the Element to remove.
@@ -116,6 +125,9 @@ namespace MWR::C3::Core
 			/// @param owner - Profile that owns this element
 			ProfileElement(std::weak_ptr<Profiler> owner);
 
+			/// Destructor
+			virtual ~ProfileElement() = default;
+
 			/// Dumps current Profile to JSON.
 			/// @return Network Profile in JSON format.
 			virtual json CreateProfileSnapshot() const;
@@ -137,6 +149,9 @@ namespace MWR::C3::Core
 			/// @param id Device Identifier.
 			/// @param typeHash Type of the Device.
 			Device(std::weak_ptr<Profiler> owner, Id id, HashT typeHash);
+
+			/// Destructor
+			virtual ~Device() = default;
 
 			/// Dumps current Profile to JSON.
 			/// @return Network Profile in JSON format.
@@ -162,6 +177,9 @@ namespace MWR::C3::Core
 			/// @param typeHash Type of the Device.
 			Channel(std::weak_ptr<Profiler> owner, Id id, HashT typeHash, bool isReturnChannel = false, bool isNegotiationChannel = false);
 
+			/// Destructor
+			virtual ~Channel() = default;
+
 			/// Dumps current Profile to JSON.
 			/// @return Network Profile in JSON format.
 			json CreateProfileSnapshot() const override;
@@ -182,6 +200,9 @@ namespace MWR::C3::Core
 			/// @param outgoingDeviceId
 			/// @param isNeighbour - if agent specified by rid is neighbouring the owner agent
 			Route(std::weak_ptr<Profiler> owner, RouteId rid, Device::Id outgoingDeviceId, bool isNeighbour = false);
+
+			/// Destructor
+			virtual ~Route() = default;
 
 			/// Dumps current Profile to JSON.
 			/// @return Network Profile in JSON format.
@@ -207,6 +228,9 @@ namespace MWR::C3::Core
 			/// @param encryptionKey asymmetric public key used to encrypt all outgoing transmission.
 			/// @param isBanned flag indicating whether Agent should be added to the black-list.
 			Relay(std::weak_ptr<Profiler> owner, AgentId agentId, BuildId buildId, int32_t lastSeen);
+
+			/// Destructor
+			virtual ~Relay() = default;
 
 			using Id = AgentId;																							///< ID typedef.
 			Id m_Id;																									///< Dynamic ID of the Relay.
@@ -274,7 +298,10 @@ namespace MWR::C3::Core
 			/// @param isBanned flag indicating whether Agent should be added to the black-list.
 			/// @param lastSeen timestamp when agent was last seen (responded)
 			/// @param hostInfo agent's host information
-			Agent(std::weak_ptr<Profiler> owner, AgentId agentId, BuildId buildId, MWR::Crypto::PublicKey encryptionKey, bool isBanned, int32_t lastSeen, bool isX64, HostInfo hostInfo);
+			Agent(std::weak_ptr<Profiler> owner, AgentId agentId, BuildId buildId, FSecure::Crypto::PublicKey encryptionKey, bool isBanned, int32_t lastSeen, bool isX64, HostInfo hostInfo);
+
+			/// Destructor
+			virtual ~Agent() = default;
 
 			/// Dumps current Profile to JSON.
 			/// @return Network Profile in JSON format.
@@ -316,7 +343,7 @@ namespace MWR::C3::Core
 			/// @returns return channel or nullptr
 			Channel* FindGrc();
 
-			MWR::Crypto::PublicKey m_EncryptionKey;																		///< Agent's public key.
+			FSecure::Crypto::PublicKey m_EncryptionKey;																		///< Agent's public key.
 			HostInfo m_HostInfo;																						///< Agent's Host information
 			bool m_IsBanned;																							///< Is Agent black-listed?
 			bool m_IsX64;
@@ -332,6 +359,9 @@ namespace MWR::C3::Core
 			/// @param gateway pointer to Gate Relay.
 			Gateway(std::weak_ptr<Profiler> owner, std::string name, std::shared_ptr<GateRelay> gateway);
 
+			/// Destructor
+			virtual ~Gateway() = default;
+
 			/// Reprofile: TurnOnConnector.
 			/// @param typeNameHash type name hash of a Connector that was turned on.
 			/// @param connector pointer to the Connector object.
@@ -344,7 +374,7 @@ namespace MWR::C3::Core
 			/// @param isBanned - is agent banned
 			/// @param lastSeen - when agent was last seen
 			/// @param hostInfo - new agnet's host information
-			Agent* ReAddAgent(AgentId agentId, BuildId buildId, MWR::Crypto::PublicKey encryptionKey, bool isBanned, int32_t lastSeen, HostInfo hostInfo);
+			Agent* ReAddAgent(AgentId agentId, BuildId buildId, FSecure::Crypto::PublicKey encryptionKey, bool isBanned, int32_t lastSeen, HostInfo hostInfo);
 
 			/// Reprofile: Add remote agent (agent not neigbouring with gateway)
 			/// @param agentId - new agent Id
@@ -354,7 +384,7 @@ namespace MWR::C3::Core
 			/// @param childGrcHash - new agent's
 			/// @param lastSeen - when agent was last seen
 			/// @param hostInfo - new agnet's host information
-			Agent* ReAddRemoteAgent(RouteId childRouteId, BuildId buildId, MWR::Crypto::PublicKey encryptionKey, RouteId ridOfConectionPlace, HashT childGrcHash, int32_t lastSeen, HostInfo hostInfo);
+			Agent* ReAddRemoteAgent(RouteId childRouteId, BuildId buildId, FSecure::Crypto::PublicKey encryptionKey, RouteId ridOfConectionPlace, HashT childGrcHash, int32_t lastSeen, HostInfo hostInfo);
 
 			/// Find an agent directly connected to relay through given channel
 			/// @param relay - relay whose neighbour to find
@@ -377,6 +407,15 @@ namespace MWR::C3::Core
 			/// Dumps current Profile to JSON.
 			/// @return Network Profile in JSON format.
 			json CreateProfileSnapshot() const override;
+
+			/// Adds a default 'create' property
+			/// @param interface - json definition of interface
+			static void EnsureCreateExists(json& interface);
+
+			/// Adds built-in command definitions (Close/TurnOff and UpdateDelay)
+			/// @param interface - json definition of interface
+			/// @param isDevice - whether interfce is a device (channel/peripheral) or not (connstors)
+			static void AddBuildInCommands(json& interface, bool isDevice);
 
 			/// Get JSON representing available Commands.
 			/// @return Network's Capability in JSON format.
@@ -406,6 +445,9 @@ namespace MWR::C3::Core
 				/// @param connector the Connector object.
 				Connector(std::weak_ptr<Profiler> owner, Id id, std::shared_ptr<ConnectorBridge> connector);
 
+				/// Destructor
+				virtual ~Connector() = default;
+
 				/// Dumps Profile to JSON.
 				/// @return Network Profile in JSON format.
 				json CreateProfileSnapshot() const override;
@@ -425,10 +467,10 @@ namespace MWR::C3::Core
 
 			struct CreateCommand
 			{
-				const uint16_t m_Id;
-				const uint32_t m_Hash;
-				const bool m_IsDevice;
-				const bool m_IsNegotiableChannel;
+				uint16_t m_Id;
+				uint32_t m_Hash;
+				bool m_IsDevice;
+				bool m_IsNegotiableChannel;
 			};
 
 			std::vector<CreateCommand> m_CreateCommands;
@@ -536,67 +578,42 @@ namespace MWR::C3::Core
 		/// @returns binder id
 		uint32_t GetBinderTo(uint32_t);
 
+		/// Helper to wrap calls to CreateProfileShnapshot
+		class SnapshotProxy
+		{
+		public:
+			/// Create a snapshot proxy
+			/// @param profiler to wrap CreateProfileShnapshot calls
+			SnapshotProxy(Profiler& profiler);
+
+			/// Check if new version of snapshot is available.
+			/// @param ob. Observer token. If observer is not registered function will always return true.
+			/// @returns true if new snapshot is available.
+			bool CheckUpdates();
+
+			/// Create a snapshot
+			/// @return std::nullopt if snaphot hasn't change since the last call
+			json const& GetSnapshot() const;
+
+		private:
+			/// Proxied profiler
+			Profiler& m_Profiler;
+
+			/// helper state variable
+			std::optional<size_t> m_PreviousHash;
+
+			/// Current snapshot
+			json m_CurrentSnapshot;
+		};
+
+		/// Create Snapshot proxy for this profiler
+		/// @returns snapshot proxy for this profiler
+		SnapshotProxy GetSnapshotProxy() { return SnapshotProxy(*this); }
+
 	protected:
 		std::optional<Gateway> m_Gateway;																				///< The "virtual gateway object".
 
-		// Forward declaration.
-		struct SubAction;
-
-		/// Base for all Actions.
-		struct BaseAction
-		{
-			enum State
-			{
-				Unknown = 0,																							///< E.g. uninitialized.
-				Planned = 1,																							///< Scheduled.
-				Cancelled = 2,																							///< Cancelled by user (information from Controller).
-				Pendning = 3,																							///< In progress.
-				Succeeded = 4,																							///< Done.
-				Failed = 5,																								///< Couldn't be done.
-				Abandoned = 6,																							///< By Profiler (e.g. dependent on previous action which has failed).
-			} m_State = State::Unknown;
-			std::string m_StateComment;																					///< E.g. error text.
-
-			/// Public ctor.
-			/// @param state initial state.
-			/// @param stateComment initial state comment.
-			BaseAction(State state, std::string stateComment);
-
-			// Identifier typedefs.
-			using ActionId = std::uint32_t;																				///< ID typedef.
-			using CommandSeqNo = std::uint32_t;																			///< Command sequence number given by Controller.
-
-			std::vector<std::pair<std::string, SubAction>> m_SubActions;												///< For Scenarios.
-		};
-
-		/// Non-root Actions.
-		struct SubAction : BaseAction
-		{
-			/// Public ctor.
-			/// @param description a short summary of what is being done in this step.
-			/// @param state initial state.
-			/// @param stateComment initial state comment.
-			SubAction(std::string description, State state = State::Planned, std::string stateComment = OBF(""));
-
-			std::string m_Description;																					///< Short summary of what is being done in this step.
-		};
-
-		/// Root-Action.
-		struct Action : BaseAction
-		{
-			/// Public ctor.
-			/// @param commandSeqNo Command sequence number given by Controller.
-			/// @param state initial state.
-			/// @param stateComment initial state comment.
-			Action(CommandSeqNo commandSeqNo, State state = State::Unknown, std::string stateComment = OBF(""));
-
-			static ActionId m_LastActionId;																				///< Global counter for Action IDs.
-			ActionId m_ActionId;																						///< ID given by Profiler for Command requested by Controller.
-			CommandSeqNo m_CommandSeqNo;																				///< Command sequence number given by Controller.
-		};
-
 		mutable std::mutex m_AccessMutex;																				///< Mutex for synchronization.
-		std::vector<Action> m_RelevantActions;																			///< List of Actions - planned, pending and finished but not yet reported to the Controller.
 
 		/// Contains hashes of binders. This allows to call: auto tsConnectorhash = GetBinderTo(hashBeacona);. First hash in pair is Peripheral hash and second one is corresponding Connector.
 		std::vector<std::pair<std::uint32_t, std::uint32_t>> m_BindersMappings;

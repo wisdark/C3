@@ -1,11 +1,11 @@
 #pragma once
 
 #include "BaseQuery.h"
-#include "Common/MWR/Crypto/Crypto.hpp"
-#include "Common/MWR/C3/Internals/BackendCommons.h"
+#include "Common/FSecure/Crypto/Crypto.hpp"
+#include "Common/FSecure/C3/Internals/BackendCommons.h"
 #include "RouteId.h"
 
-namespace MWR::C3::Core
+namespace FSecure::C3::Core
 {
 	// Typedefs.
 	using ProtocolsUnderlyingType = std::uint8_t;
@@ -53,8 +53,8 @@ namespace MWR::C3::Core
 			/// @param packetAfterProcedureNumber body of query.
 			QueryN2N(std::weak_ptr<DeviceBridge> sender, RouteId neighborRouteId, ProceduresUnderlyingType procedureNo, ByteView packetAfterProcedureNumber)
 				: BaseQuery{ sender }
-				, m_SendersRid{ neighborRouteId }
 				, m_QueryPacketBody{ packetAfterProcedureNumber }
+				, m_SendersRid{ neighborRouteId }
 			{
 
 			}
@@ -99,7 +99,7 @@ namespace MWR::C3::Core
 			/// @return buffer containing composed header.
 			ByteVector CompileProtocolHeader() const override
 			{
-				return ByteVector{}.Write(static_cast<ProtocolsUnderlyingType>(Protocols::N2N), m_SendersRid.ToByteArray());
+				return ByteVector{}.Write(static_cast<ProtocolsUnderlyingType>(Protocols::N2N), m_SendersRid);
 			}
 
 		private:
@@ -122,7 +122,7 @@ namespace MWR::C3::Core
 		};
 
 		/// Query type used to join network.
-		struct InitializeRouteQuery : Query<0>
+		struct InitializeRouteQuery final : Query<0>
 		{
 			/// Create new instance.
 			/// @param sendersRid RouteId created from relay AgentId, and grc DeviceId.
@@ -135,7 +135,7 @@ namespace MWR::C3::Core
 			static std::unique_ptr<InitializeRouteQuery> Create(RouteId sendersRid, BuildId buildId, Crypto::PublicKey gatewayEncryptionKey, Crypto::PublicKey agentsPublicEncryptionKey, HashT grcHash, int32_t timestamp, ResponseType responseType = ResponseType::None)
 			{
 				auto query = std::make_unique<InitializeRouteQuery>(sendersRid, responseType);
-				query->m_QueryPacketBody = Crypto::EncryptAnonymously(buildId.ToByteVector().Write(agentsPublicEncryptionKey.ToByteVector(), grcHash, timestamp, HostInfo().ToByteVector()), gatewayEncryptionKey);
+				query->m_QueryPacketBody = Crypto::EncryptAnonymously(ByteVector::Create(buildId, agentsPublicEncryptionKey.ToByteVector(), grcHash, timestamp, HostInfo::Gather()), gatewayEncryptionKey);
 				return query;
 			}
 
@@ -145,7 +145,7 @@ namespace MWR::C3::Core
 		};
 
 		/// Start of negotiation process. New relay request unique connection.
-		struct ChannelIdExchangeStep1 : Query<2>
+		struct ChannelIdExchangeStep1 final : Query<2>
 		{
 			/// Create query.
 			/// @param sendersRid route id of sender.
@@ -163,7 +163,7 @@ namespace MWR::C3::Core
 		};
 
 		/// Closure of negotiation process. Network relay accepts unique connection.
-		struct ChannelIdExchangeStep2 : Query<3>
+		struct ChannelIdExchangeStep2 final : Query<3>
 		{
 			/// Create query.
 			/// @param sendersRid route id of sender.
@@ -183,8 +183,11 @@ namespace MWR::C3::Core
 		/// Class representing support for C3 N2N Requests.
 		struct RequestHandler
 		{
+			/// Destructor
+			virtual ~RequestHandler() = default;
+
 			/// Declaration of support for InitializeRouteQuery Request.
-			virtual void On(InitializeRouteQuery&&) = 0;
+			virtual void On(InitializeRouteQuery) = 0;
 
 			/// Declaration of support for ChannelIdExchangeStep1 Request.
 			virtual void On(ChannelIdExchangeStep1) = 0;
@@ -236,9 +239,9 @@ namespace MWR::C3::Core
 			/// @param packetAfterProcedureNumber body of query.
 			QueryS2G(std::weak_ptr<DeviceBridge> sender, RouteId sendersRid, int32_t timestamp, ByteView packetAfterProcedureNumber)
 				: BaseQuery{ sender }
+				, m_QueryPacketBody{ packetAfterProcedureNumber }
 				, m_SendersRid{ sendersRid }
 				, m_Timestamp{timestamp}
-				, m_QueryPacketBody{ packetAfterProcedureNumber }
 			{
 
 			}
@@ -313,7 +316,7 @@ namespace MWR::C3::Core
 		/// Query used by relay in network, when new relay wants to join.
 		/// New Relay can only send N2N::InitializeRouteQuery to direct neigbor, but cannot communicate with wwhole network.
 		/// Network relay will send S2G::InitializeRouteQuery to gateway, announcing new relay.
-		struct InitializeRouteQuery : Query<0>
+		struct InitializeRouteQuery final : Query<0>
 		{
 			/// Create new instance.
 			/// @param rid of relay sending S2G
@@ -325,7 +328,7 @@ namespace MWR::C3::Core
 			static std::unique_ptr<InitializeRouteQuery> Create(RouteId rid, int32_t timestamp, RouteId senderRid, DeviceId senderSideDid, ByteVector encryptedBlob, Crypto::PublicKey gatewayPublicEncryptionKey)
 			{
 				auto query = std::make_unique<InitializeRouteQuery>(rid, timestamp, ResponseType::None);
-				query->m_QueryPacketBody = Crypto::EncryptAnonymously(query->CompileQueryHeader().Concat(rid.ToByteVector(), timestamp, senderRid.ToByteVector(), senderSideDid.ToByteVector(), encryptedBlob), gatewayPublicEncryptionKey);
+				query->m_QueryPacketBody = Crypto::EncryptAnonymously(query->CompileQueryHeader().Write(rid, timestamp, senderRid, senderSideDid).Concat(encryptedBlob), gatewayPublicEncryptionKey);
 				return query;
 			}
 
@@ -346,7 +349,7 @@ namespace MWR::C3::Core
 		};
 
 		/// Request to gateway announcing new device in network.
-		struct AddDeviceResponse : Query<1>
+		struct AddDeviceResponse final : Query<1>
 		{
 			/// Create new instance.
 			/// @param rid of relay sending S2G
@@ -360,7 +363,7 @@ namespace MWR::C3::Core
 			{
 				auto query = std::make_unique<AddDeviceResponse>(rid, timestamp, ResponseType::None);
 				std::uint8_t flags = static_cast<std::uint8_t>(isChannel) | (static_cast<std::uint8_t>(isNegotiationChannel) << 1);
-				query->m_QueryPacketBody = Crypto::EncryptAnonymously(query->CompileQueryHeader().Concat(rid.ToByteArray(), timestamp, newDeviceId.ToByteVector(), deviceTypeHash, flags), gatewayPublicEncryptionKey);
+				query->m_QueryPacketBody = Crypto::EncryptAnonymously(query->CompileQueryHeader().Write(rid, timestamp, newDeviceId, deviceTypeHash, flags), gatewayPublicEncryptionKey);
 				return query;
 			}
 
@@ -370,7 +373,7 @@ namespace MWR::C3::Core
 		};
 
 		/// Request to gateway when peripheral received new packet of data
-		struct DeliverToBinder : Query<2>
+		struct DeliverToBinder final : Query<2>
 		{
 			/// Create new instance.
 			/// @param rid of relay sending S2G
@@ -382,7 +385,7 @@ namespace MWR::C3::Core
 			static std::unique_ptr<DeliverToBinder> Create(RouteId rid, int32_t timestamp, DeviceId peripheralId, HashT connectorHash, ByteView blobFromPeripheral, Crypto::PublicKey gatewayPublicEncryptionKey)
 			{
 				auto query = std::make_unique<DeliverToBinder>(rid, timestamp, ResponseType::None);
-				query->m_QueryPacketBody = Crypto::EncryptAnonymously(query->CompileQueryHeader().Concat(rid.ToByteArray(), timestamp, peripheralId.ToByteVector(), connectorHash, blobFromPeripheral), gatewayPublicEncryptionKey);
+				query->m_QueryPacketBody = Crypto::EncryptAnonymously(query->CompileQueryHeader().Write(rid, timestamp, peripheralId, connectorHash).Concat(blobFromPeripheral), gatewayPublicEncryptionKey);
 				return query;
 			}
 
@@ -403,7 +406,7 @@ namespace MWR::C3::Core
 		};
 
 		/// Request to gateway that new channel was negotiated.
-		struct NewNegotiatedChannelNotification : Query<3>
+		struct NewNegotiatedChannelNotification final : Query<3>
 		{
 			/// Create new instance.
 			/// @param rid of relay sending S2G
@@ -416,19 +419,7 @@ namespace MWR::C3::Core
 			static std::unique_ptr<NewNegotiatedChannelNotification> Create(RouteId rid, int32_t timestamp, DeviceId newDeviceId, DeviceId negotiatiorId, ByteView inId, ByteView outId, Crypto::PublicKey gatewayPublicEncryptionKey)
 			{
 				auto query = std::make_unique<NewNegotiatedChannelNotification>(rid, timestamp, ResponseType::None);
-				query->m_QueryPacketBody = Crypto::EncryptAnonymously
-				(
-					query->CompileQueryHeader()
-						.Concat(rid.ToByteArray())
-						.Write
-						(
-							timestamp
-							, newDeviceId.ToUnderlyingType()
-							, negotiatiorId.ToUnderlyingType()
-							, inId
-							, outId
-						)
-					, gatewayPublicEncryptionKey);
+				query->m_QueryPacketBody = Crypto::EncryptAnonymously(query->CompileQueryHeader().Write(rid, timestamp, newDeviceId, negotiatiorId, inId, outId), gatewayPublicEncryptionKey);
 				return query;
 			}
 
@@ -439,26 +430,17 @@ namespace MWR::C3::Core
 
 		/// Request carrying unspecified blob of data.
 		/// Use carefully, creating new request is recommended instead of using Notification.
-		struct Notification : Query<4>
+		struct Notification final : Query<4>
 		{
 			/// Create new instance.
 			/// @param rid of relay sending S2G
 			/// @param timestamp reported time at relay.
 			/// @param blob unspecified data
 			/// @param gatewayPublicEncryptionKey key used to encrypt package. Only gateway will be able to decrypt package.
-			static std::unique_ptr<Notification> Create(RouteId rid, int32_t timestamp, MWR::ByteView blob, Crypto::PublicKey gatewayPublicEncryptionKey)
+			static std::unique_ptr<Notification> Create(RouteId rid, int32_t timestamp, FSecure::ByteView blob, Crypto::PublicKey gatewayPublicEncryptionKey)
 			{
 				auto query = std::make_unique<Notification>(rid, timestamp, ResponseType::None);
-				query->m_QueryPacketBody = Crypto::EncryptAnonymously
-				(
-					query->CompileQueryHeader()
-					.Concat(rid.ToByteArray())
-					.Write
-					(
-						timestamp
-						, blob
-					)
-					, gatewayPublicEncryptionKey);
+				query->m_QueryPacketBody = Crypto::EncryptAnonymously(query->CompileQueryHeader().Write(rid, timestamp, blob), gatewayPublicEncryptionKey);
 				return query;
 			}
 
@@ -481,8 +463,11 @@ namespace MWR::C3::Core
 		/// Class representing support for C3 N2N Requests.
 		struct RequestHandler
 		{
+			/// Destructor
+			virtual ~RequestHandler() = default;
+
 			/// Declaration of support for InitializeRouteQuery Request.
-			virtual void On(InitializeRouteQuery&&) = 0;
+			virtual void On(InitializeRouteQuery) = 0;
 
 			/// Default empty handler for AddDeviceResponse Request.
 			virtual void On(AddDeviceResponse) {};

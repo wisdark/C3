@@ -1,24 +1,24 @@
 #include "StdAfx.h"
 #include "Distributor.h"
 #include "DeviceBridge.h"
-#include "Common/MWR/CppTools/ByteView.h"
+#include "Common/FSecure/CppTools/ByteConverter/ByteConverter.h"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::C3::Core::Distributor::Distributor(LoggerCallback callbackOnLog, Crypto::PrivateKey const& decryptionKey, Crypto::SymmetricKey const& broadcastKey)
+FSecure::C3::Core::Distributor::Distributor(LoggerCallback callbackOnLog, Crypto::PrivateKey const& decryptionKey, Crypto::SymmetricKey const& broadcastKey)
 	: m_CallbackOnLog{ callbackOnLog }
-	, m_DecryptionKey{ decryptionKey }
 	, m_BroadcastKey{ broadcastKey }
+	, m_DecryptionKey{ decryptionKey }
 {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Distributor::Log(LogMessage const& message, DeviceId sender) noexcept
+void FSecure::C3::Core::Distributor::Log(LogMessage const& message, DeviceId sender) noexcept
 {
-	m_CallbackOnLog(message, &std::string_view{ sender.IsNull() ? OBF("") : sender.ToString() });
+	m_CallbackOnLog(message, std::string_view{ sender.IsNull() ? "" : sender.ToString() });
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Distributor::OnPacketReceived(ByteView packet, std::shared_ptr<DeviceBridge> sender)
+void FSecure::C3::Core::Distributor::OnPacketReceived(ByteView packet, std::shared_ptr<DeviceBridge> sender)
 {
 	try
 	{
@@ -53,13 +53,13 @@ void MWR::C3::Core::Distributor::OnPacketReceived(ByteView packet, std::shared_p
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-bool MWR::C3::Core::Distributor::IsAgentBanned(AgentId agentId)
+bool FSecure::C3::Core::Distributor::IsAgentBanned(AgentId agentId)
 {
 	return false;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Distributor::OnProtocolN2N(ByteView packet0, std::shared_ptr<DeviceBridge> sender)
+void FSecure::C3::Core::Distributor::OnProtocolN2N(ByteView packet0, std::shared_ptr<DeviceBridge> sender)
 {
 	// Protocol structure: [NeighborToNeighbor][SENDERS AID.IID][N2N Procedure][FIELDS]...
 	try
@@ -68,28 +68,30 @@ void MWR::C3::Core::Distributor::OnProtocolN2N(ByteView packet0, std::shared_ptr
 		if (packet0.size() < 1 + RouteId::BinarySize + 1)
 			throw std::invalid_argument{ OBF("N2N packet too short.") };
 
+		packet0.remove_prefix(1);
+
 		// Parse neighbor identifier and check whether is banned.
-		auto neighborRouteId = RouteId(packet0.SubString(1));
+		auto neighborRouteId = packet0.Read<RouteId>();
 		if (IsAgentBanned(neighborRouteId.GetAgentId()))
 			return Log({ OBF("Received packet from a banned Agent ") + neighborRouteId.ToString() + OBF("."), LogMessage::Severity::Warning });
 
 		// Handle Procedure part.
-		return ProceduresN2N::RequestHandler::ParseRequestAndHandleIt(sender, neighborRouteId, packet0.SubString(1 + RouteId::BinarySize));
+		return ProceduresN2N::RequestHandler::ParseRequestAndHandleIt(sender, neighborRouteId, packet0);
 	}
 	catch (std::exception & exception)
 	{
-		throw std::runtime_error{ OBF_STR("Failed to parse N2N packet. ") +exception.what() };
+		throw std::runtime_error{ OBF_STR("Failed to parse N2N packet. ") + exception.what() };
 	}
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void MWR::C3::Core::Distributor::LockAndSendPacket(ByteView packet, std::shared_ptr<DeviceBridge> channel)
+void FSecure::C3::Core::Distributor::LockAndSendPacket(ByteView packet, std::shared_ptr<DeviceBridge> channel)
 {
-	channel->OnPassNetworkPacket(MWR::Crypto::EncryptAnonymously(packet, m_BroadcastKey));
+	channel->OnPassNetworkPacket(FSecure::Crypto::EncryptAnonymously(packet, m_BroadcastKey));
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-MWR::ByteVector MWR::C3::Core::Distributor::UnlockPacket(ByteView packet)
+FSecure::ByteVector FSecure::C3::Core::Distributor::UnlockPacket(ByteView packet)
 {
-	return MWR::Crypto::DecryptFromAnonymous(packet, m_BroadcastKey);
+	return FSecure::Crypto::DecryptFromAnonymous(packet, m_BroadcastKey);
 }

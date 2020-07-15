@@ -1,12 +1,12 @@
 #pragma once
 
-#include "Common/MWR/C3/Internals/BackendCommons.h"
+#include "Common/FSecure/C3/Internals/BackendCommons.h"
 #include "Identifiers.h"
-#include "Common/MWR/C3/Internals/Interface.h"
+#include "Common/FSecure/C3/Internals/Interface.h"
 #include "QualityOfService.h"
 
 // Forward declarations.
-namespace MWR::C3
+namespace FSecure::C3
 {
 	struct Device;
 	namespace Core
@@ -15,7 +15,7 @@ namespace MWR::C3
 	}
 }
 
-namespace MWR::C3::Core
+namespace FSecure::C3::Core
 {
 	/// PIMPL for Device type.
 	struct DeviceBridge : AbstractDeviceBridge, std::enable_shared_from_this<DeviceBridge>
@@ -35,6 +35,9 @@ namespace MWR::C3::Core
 
 		/// Detaches the Device.
 		void Detach() override;
+
+		/// Notify the relay that this bridge should be closed
+		void Close() override;
 
 		/// Callback periodically fired by Relay for Device to update it's state. Might be called from a separate thread. Device should perform all necessary actions and leave as soon as possible.
 		void OnReceive() override;
